@@ -1,7 +1,9 @@
-import { readFile } from "node:fs/promises";
-import { execFileSync } from "node:child_process";
+import { readTextSourceFiles } from "./scan-source-files.mjs";
 
-const terms = process.argv.slice(2).filter((term) => term.length > 0);
+const rawTerms = process.argv.slice(2);
+const terms = (rawTerms[0] === "--" ? rawTerms.slice(1) : rawTerms).filter(
+  (term) => term.length > 0,
+);
 
 if (terms.length === 0) {
   process.stderr.write(
@@ -10,18 +12,9 @@ if (terms.length === 0) {
   process.exit(2);
 }
 
-const files = execFileSync(
-  "git",
-  ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-  { encoding: "buffer" },
-)
-  .toString("utf8")
-  .split("\0")
-  .filter(Boolean);
 const findings = [];
 
-for (const file of files) {
-  const content = await readFile(file, "utf8");
+for (const { content, file } of await readTextSourceFiles()) {
   for (const term of terms) {
     if (content.includes(term)) findings.push(`${file}: ${term}`);
   }
