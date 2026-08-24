@@ -2,6 +2,15 @@ export type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 
 export type GapStrategy = "zero-fill" | "one-fill" | "compact" | "skip";
 
+export type Ownership = "absent" | "exact" | "semantic" | "ambiguous";
+
+export type PlannedAction =
+  | "decorate"
+  | "insert"
+  | "replace"
+  | "preserve"
+  | "skip";
+
 export interface NumberingSettings {
   topLevel: HeadingLevel;
   bottomLevel: HeadingLevel;
@@ -36,4 +45,32 @@ export interface HeadingNode {
   contentRange: SourceRange;
   closingSequence: string;
   lineEnding: "" | "\n" | "\r\n";
+}
+
+export interface TextEdit {
+  range: SourceRange;
+  expectedText: string;
+  replacementText: string;
+}
+
+export interface NumberingPlanEntry {
+  heading: HeadingNode;
+  segments: number[];
+  displayPrefix: string;
+  ownership: Ownership;
+  action: PlannedAction;
+  reason: string;
+  edit?: TextEdit;
+}
+
+export interface PlanDiagnostic {
+  code: string;
+  message: string;
+  line: number;
+  sourceRange: SourceRange;
+}
+
+export interface NumberingPlan {
+  entries: NumberingPlanEntry[];
+  diagnostics: PlanDiagnostic[];
 }

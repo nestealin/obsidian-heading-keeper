@@ -10,6 +10,9 @@ importers:
       "@types/node":
         specifier: 22.15.3
         version: 22.15.3
+      fast-check:
+        specifier: 4.9.0
+        version: 4.9.0
       prettier:
         specifier: 3.6.2
         version: 3.6.2
@@ -607,6 +610,13 @@ packages:
       }
     engines: { node: ">=12.0.0" }
 
+  fast-check@4.9.0:
+    resolution:
+      {
+        integrity: sha512-7ms6T7SybUev/PQITciI0yLM2pOSFy5zpG8Ty7tQofcVaQUvrMXp6CBwqF6fThLCLOrfBtuHAtwq6Yu4XPCllg==,
+      }
+    engines: { node: ">=12.17.0" }
+
   fdir@6.5.0:
     resolution:
       {
@@ -681,6 +691,12 @@ packages:
       }
     engines: { node: ">=14" }
     hasBin: true
+
+  pure-rand@8.4.2:
+    resolution:
+      {
+        integrity: sha512-vvuOGgcuPJAirlHvuQw1TrOiw7ptaIXXmIbNuiNOY6lNGJJH49PQ1Kj4nd783nPdQhQdicgOjVI2yI/9BD6/Ng==,
+      }
 
   rollup@4.62.5:
     resolution:
@@ -1098,6 +1114,10 @@ snapshots:
 
   expect-type@1.4.0: {}
 
+  fast-check@4.9.0:
+    dependencies:
+      pure-rand: 8.4.2
+
   fdir@6.5.0(picomatch@4.0.5):
     optionalDependencies:
       picomatch: 4.0.5
@@ -1126,6 +1146,8 @@ snapshots:
       source-map-js: 1.2.1
 
   prettier@3.6.2: {}
+
+  pure-rand@8.4.2: {}
 
   rollup@4.62.5:
     dependencies:
