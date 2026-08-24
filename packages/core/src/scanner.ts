@@ -41,7 +41,10 @@ export function scanHeadings(markdown: string): HeadingNode[] {
     }
     if (fenceMatch) {
       const token = fenceMatch[2] ?? "";
-      fence = { marker: token[0] as "`" | "~", length: token.length };
+      const info = fenceMatch[3] ?? "";
+      if (token[0] !== "`" || !info.includes("`")) {
+        fence = { marker: token[0] as "`" | "~", length: token.length };
+      }
       offset += raw.length;
       continue;
     }

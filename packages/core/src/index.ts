@@ -11,5 +11,5 @@ export type {
   HeadingNode,
   NumberingSettings,
   SettingsValidation,
-  TextRange,
+  SourceRange,
 } from "./types.js";

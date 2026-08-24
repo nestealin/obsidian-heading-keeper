@@ -71,6 +71,22 @@ describe("scanHeadings", () => {
     ]);
   });
 
+  it("does not open a backtick fence when its info string contains a backtick", () => {
+    const markdown = ["```md`", "# visible", "```"].join("\n");
+
+    expect(scanHeadings(markdown).map((heading) => heading.semanticText)).toEqual([
+      "visible",
+    ]);
+  });
+
+  it("allows a tilde fence info string to contain a backtick", () => {
+    const markdown = ["~~~md`", "# hidden", "~~~", "## shown"].join("\n");
+
+    expect(scanHeadings(markdown).map((heading) => heading.semanticText)).toEqual([
+      "shown",
+    ]);
+  });
+
   it("keeps Unicode text, empty headings, and closing sequences distinct", () => {
     const markdown = ["## 中文 🐙", "###", "#### trailing   ", "##### end #####"].join("\n");
 

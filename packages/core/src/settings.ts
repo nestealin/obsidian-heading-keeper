@@ -15,7 +15,12 @@ export const DEFAULT_SETTINGS: Readonly<NumberingSettings> = Object.freeze({
   gapStrategy: "compact",
 });
 
-const gapStrategies: readonly GapStrategy[] = ["compact", "preserve"];
+const gapStrategies: readonly GapStrategy[] = [
+  "zero-fill",
+  "one-fill",
+  "compact",
+  "skip",
+];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

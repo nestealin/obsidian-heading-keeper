@@ -104,13 +104,10 @@ describe("validateSettings", () => {
   });
 
   it("accepts each supported gap strategy and rejects unsupported values", () => {
-    expect(validateSettings({ ...validSettings, gapStrategy: "compact" }).ok).toBe(
-      true,
-    );
-    expect(validateSettings({ ...validSettings, gapStrategy: "preserve" }).ok).toBe(
-      true,
-    );
-    expectInvalid({ ...validSettings, gapStrategy: "skip" }, "gapStrategy");
+    for (const gapStrategy of ["zero-fill", "one-fill", "compact", "skip"] as const) {
+      expect(validateSettings({ ...validSettings, gapStrategy }).ok).toBe(true);
+    }
+    expectInvalid({ ...validSettings, gapStrategy: "preserve" }, "gapStrategy");
     expectInvalid({ ...validSettings, gapStrategy: 1 }, "gapStrategy");
   });
 });
