@@ -1,0 +1,24 @@
+{
+  "name": "heading-numbering",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.15.0",
+  "engines": {
+    "node": ">=22.20.0 <25"
+  },
+  "scripts": {
+    "build": "corepack pnpm -r build",
+    "format:check": "prettier --check .",
+    "typecheck": "corepack pnpm -r typecheck",
+    "test": "corepack pnpm -r build && vitest --config vitest.workspace.ts run",
+    "scan:sensitive": "node scripts/scan-sensitive.mjs",
+    "scan:rejected": "node scripts/scan-rejected.mjs",
+    "verify:local": "corepack pnpm format:check && corepack pnpm typecheck && corepack pnpm test && corepack pnpm build && corepack pnpm scan:sensitive && git diff --check"
+  },
+  "devDependencies": {
+    "prettier": "3.6.2",
+    "typescript": "5.9.2",
+    "vitest": "4.0.16"
+  }
+}
