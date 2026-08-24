@@ -246,8 +246,10 @@ export class HeadingNumberingPlugin extends Plugin {
         token,
       };
       this.readingRoots.set(root, state);
-      registerReadingRoot(root, section);
-      await this.decorateReadingRoot(root, state);
+      registerReadingRoot(root, section, context.sourcePath);
+      if (await this.decorateReadingRoot(root, state)) {
+        await this.refreshVirtualRendering();
+      }
     });
     this.addCommand({
       id: commandIds.preview,
@@ -325,29 +327,44 @@ export class HeadingNumberingPlugin extends Plugin {
   private async decorateReadingRoot(
     root: HTMLElement,
     state: ReadingRootState,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const request = state.request + 1;
     state.request = request;
     const generation = this.renderGeneration;
     if (!state.section) {
       if (this.isReadingRequestCurrent(root, state, request, generation)) {
-        decorateReadingHeadings(root, "", this.settings, null);
+        decorateReadingHeadings(
+          root,
+          "",
+          this.settings,
+          null,
+          state.sourcePath,
+        );
+        return true;
       }
-      return;
+      return false;
     }
 
     const file = this.app.vault.getAbstractFileByPath(state.sourcePath);
     if (!(file instanceof TFile)) {
       if (this.isReadingRequestCurrent(root, state, request, generation)) {
         disposeReadingRoot(root);
+        return true;
       }
-      return;
+      return false;
     }
     const markdown = await this.app.vault.read(file);
     if (!this.isReadingRequestCurrent(root, state, request, generation)) {
-      return;
+      return false;
     }
-    decorateReadingHeadings(root, markdown, this.settings, state.section);
+    decorateReadingHeadings(
+      root,
+      markdown,
+      this.settings,
+      state.section,
+      state.sourcePath,
+    );
+    return true;
   }
 
   private async refreshVirtualRendering(): Promise<void> {

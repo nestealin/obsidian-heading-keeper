@@ -32,6 +32,7 @@ export interface ReadingDecorationPlan {
 interface OwnedRoot {
   prefixes: Set<HTMLElement>;
   section: ReadingSection | null;
+  sourcePath: string;
 }
 
 const ownedRoots = new WeakMap<HTMLElement, OwnedRoot>();
@@ -74,13 +75,20 @@ function isInRange(line: number, range: ReadingSection): boolean {
   return line >= range.lineStart && line <= range.lineEnd;
 }
 
-function nestedSections(root: HTMLElement): ReadingSection[] {
+function nestedSections(
+  root: HTMLElement,
+  sourcePath: string,
+): ReadingSection[] {
   const sections: ReadingSection[] = [];
   for (const candidate of registeredRoots) {
     if (candidate === root || !contains(root, candidate)) {
       continue;
     }
-    const section = ownedRoots.get(candidate)?.section ?? null;
+    const ownedRoot = ownedRoots.get(candidate);
+    if (ownedRoot?.sourcePath !== sourcePath) {
+      continue;
+    }
+    const section = ownedRoot.section;
     if (isSectionInfo(section)) {
       sections.push(section);
     }
@@ -91,13 +99,15 @@ function nestedSections(root: HTMLElement): ReadingSection[] {
 function registerRoot(
   root: HTMLElement,
   section: ReadingSection | null,
+  sourcePath: string,
 ): OwnedRoot {
   let ownedRoot = ownedRoots.get(root);
   if (!ownedRoot) {
-    ownedRoot = { prefixes: new Set<HTMLElement>(), section };
+    ownedRoot = { prefixes: new Set<HTMLElement>(), section, sourcePath };
     ownedRoots.set(root, ownedRoot);
   } else {
     ownedRoot.section = section;
+    ownedRoot.sourcePath = sourcePath;
   }
 
   for (const ancestor of registeredRoots) {
@@ -122,8 +132,9 @@ function registerRoot(
 export function registerReadingRoot(
   root: HTMLElement,
   section: ReadingSection | null,
+  sourcePath: string,
 ): void {
-  registerRoot(root, section);
+  registerRoot(root, section, sourcePath);
 }
 
 function visibleHeadings(root: HTMLElement): HTMLElement[] {
@@ -229,8 +240,9 @@ export function decorateReadingHeadings(
   markdown: string,
   settings: NumberingSettings,
   section: ReadingSection | null,
+  sourcePath = "",
 ): Pick<ReadingDecorationPlan, "diagnostics"> {
-  const ownedRoot = registerRoot(root, section);
+  const ownedRoot = registerRoot(root, section, sourcePath);
   clearHeadingNumberingPrefixes(root);
   const headings = visibleHeadings(root);
   const decorationPlan = planReadingDecorations(
@@ -238,7 +250,7 @@ export function decorateReadingHeadings(
     settings,
     headings.map((heading) => Number(heading.tagName.slice(1))),
     section,
-    nestedSections(root),
+    nestedSections(root, sourcePath),
   );
 
   for (const prefix of decorationPlan.prefixes) {

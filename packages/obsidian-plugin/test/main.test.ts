@@ -419,6 +419,44 @@ describe("HeadingNumberingPlugin", () => {
     await firstRendering;
     expect(root.prefixes()).toEqual(["2. "]);
   });
+
+  it("keeps nested Parent.md and Child.md rendering isolated in either callback order", async () => {
+    for (const childFirst of [false, true]) {
+      const parent = createReadingRoot(2);
+      const child = createReadingRoot(2);
+      parent.appendChild(child);
+      state.readingMarkdown.set("Parent.md", "## Parent\n![[Child]]");
+      state.readingMarkdown.set("Child.md", "## Child");
+      const plugin = new HeadingNumberingPlugin();
+      await plugin.onload();
+      const processor = state.postProcessors.at(-1) as (
+        root: HTMLElement,
+        context: ReturnType<typeof readingContext>,
+      ) => Promise<void>;
+      const renderParent = () =>
+        processor(
+          parent as unknown as HTMLElement,
+          readingContext({ lineEnd: 1, lineStart: 0 }, "Parent.md"),
+        );
+      const renderChild = () =>
+        processor(
+          child as unknown as HTMLElement,
+          readingContext({ lineEnd: 0, lineStart: 0 }, "Child.md"),
+        );
+
+      if (childFirst) {
+        await renderChild();
+        await renderParent();
+      } else {
+        await renderParent();
+        await renderChild();
+      }
+
+      expect(parent.prefixes()).toEqual(["1. ", "1. "]);
+      expect(child.prefixes()).toEqual(["1. "]);
+      plugin.onunload();
+    }
+  });
 });
 
 function readingContext(
@@ -426,6 +464,7 @@ function readingContext(
     lineEnd: 0,
     lineStart: 0,
   },
+  sourcePath = "virtual.md",
 ) {
   return {
     addChild(child: { onunload: () => void }) {
@@ -434,7 +473,7 @@ function readingContext(
     getSectionInfo() {
       return section;
     },
-    sourcePath: "virtual.md",
+    sourcePath,
   };
 }
 

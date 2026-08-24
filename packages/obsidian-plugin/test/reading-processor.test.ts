@@ -4,6 +4,7 @@ import {
   clearHeadingNumberingPrefixes,
   decorateReadingHeadings,
   planReadingDecorations,
+  registerReadingRoot,
 } from "../src/reading-processor.js";
 import { planEditorDecorations } from "../src/editor-extension.js";
 
@@ -296,6 +297,61 @@ describe("Reading virtual decorations", () => {
       expect(
         child.children[0]?.children.map((node) => node.textContent),
       ).toEqual(["2. "]);
+    }
+  });
+
+  it("keeps cross-document embedded root ranges in their own source identity", () => {
+    const renderInOrder = (childFirst: boolean) => {
+      const parent = readingRoot([2]);
+      const child = readingRoot([2]);
+      parent.appendChild(child);
+      const parentSection = { lineEnd: 1, lineStart: 0 };
+      const childSection = { lineEnd: 0, lineStart: 0 };
+      registerReadingRoot(
+        parent as unknown as HTMLElement,
+        parentSection,
+        "Parent.md",
+      );
+      registerReadingRoot(
+        child as unknown as HTMLElement,
+        childSection,
+        "Child.md",
+      );
+      const renderParent = () =>
+        decorateReadingHeadings(
+          parent as unknown as HTMLElement,
+          "## Parent\n![[Child]]",
+          DEFAULT_STORED_SETTINGS,
+          parentSection,
+          "Parent.md",
+        );
+      const renderChild = () =>
+        decorateReadingHeadings(
+          child as unknown as HTMLElement,
+          "## Child",
+          DEFAULT_STORED_SETTINGS,
+          childSection,
+          "Child.md",
+        );
+
+      if (childFirst) {
+        renderChild();
+        renderParent();
+      } else {
+        renderParent();
+        renderChild();
+      }
+      return { child, parent };
+    };
+
+    for (const childFirst of [false, true]) {
+      const { child, parent } = renderInOrder(childFirst);
+      expect(
+        parent.children[0]?.children.map((node) => node.textContent),
+      ).toEqual(["1. "]);
+      expect(
+        child.children[0]?.children.map((node) => node.textContent),
+      ).toEqual(["1. "]);
     }
   });
 });
