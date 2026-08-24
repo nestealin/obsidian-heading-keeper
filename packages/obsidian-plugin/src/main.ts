@@ -1,5 +1,6 @@
 import {
   Notice,
+  MarkdownRenderChild,
   Plugin,
   PluginSettingTab,
   Setting,
@@ -24,8 +25,10 @@ import {
   refreshHeadingNumberingExtensions,
 } from "./editor-extension.js";
 import {
-  clearHeadingNumberingPrefixes,
   decorateReadingHeadings,
+  disposeReadingRoot,
+  registerReadingRoot,
+  type ReadingSection,
 } from "./reading-processor.js";
 
 export { resolveLocale, translate } from "./i18n.js";
@@ -38,6 +41,26 @@ const commandIds = {
   refresh: "refresh-virtual",
   remove: "remove-confirmed",
 } as const;
+
+interface ReadingRootState {
+  request: number;
+  section: ReadingSection | null;
+  sourcePath: string;
+  token: object;
+}
+
+class ReadingRenderChild extends MarkdownRenderChild {
+  constructor(
+    root: HTMLElement,
+    private readonly release: () => void,
+  ) {
+    super(root);
+  }
+
+  onunload(): void {
+    this.release();
+  }
+}
 
 export class HeadingNumberingSettingTab extends PluginSettingTab {
   constructor(
@@ -195,7 +218,9 @@ export class HeadingNumberingSettingTab extends PluginSettingTab {
 export class HeadingNumberingPlugin extends Plugin {
   settings: StoredSettings = { ...DEFAULT_STORED_SETTINGS };
   settingsErrors: FieldError[] = [];
-  private readonly readingRoots = new Map<HTMLElement, string>();
+  private disposed = false;
+  private renderGeneration = 0;
+  private readonly readingRoots = new Map<HTMLElement, ReadingRootState>();
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -204,7 +229,25 @@ export class HeadingNumberingPlugin extends Plugin {
       createHeadingNumberingExtension(() => this.settings),
     );
     this.registerMarkdownPostProcessor(async (root, context) => {
-      await this.decorateReadingRoot(root, context.sourcePath);
+      const token = {};
+      context.addChild(
+        new ReadingRenderChild(root, () =>
+          this.releaseReadingRoot(root, token),
+        ),
+      );
+      const sectionInfo = context.getSectionInfo(root);
+      const section = sectionInfo
+        ? { lineEnd: sectionInfo.lineEnd, lineStart: sectionInfo.lineStart }
+        : null;
+      const state: ReadingRootState = {
+        request: 0,
+        section,
+        sourcePath: context.sourcePath,
+        token,
+      };
+      this.readingRoots.set(root, state);
+      registerReadingRoot(root, section);
+      await this.decorateReadingRoot(root, state);
     });
     this.addCommand({
       id: commandIds.preview,
@@ -237,8 +280,10 @@ export class HeadingNumberingPlugin extends Plugin {
   }
 
   onunload(): void {
+    this.disposed = true;
+    this.renderGeneration += 1;
     for (const root of this.readingRoots.keys()) {
-      clearHeadingNumberingPrefixes(root);
+      disposeReadingRoot(root);
     }
     this.readingRoots.clear();
   }
@@ -279,24 +324,65 @@ export class HeadingNumberingPlugin extends Plugin {
 
   private async decorateReadingRoot(
     root: HTMLElement,
-    sourcePath: string,
+    state: ReadingRootState,
   ): Promise<void> {
-    const file = this.app.vault.getAbstractFileByPath(sourcePath);
+    const request = state.request + 1;
+    state.request = request;
+    const generation = this.renderGeneration;
+    if (!state.section) {
+      if (this.isReadingRequestCurrent(root, state, request, generation)) {
+        decorateReadingHeadings(root, "", this.settings, null);
+      }
+      return;
+    }
+
+    const file = this.app.vault.getAbstractFileByPath(state.sourcePath);
     if (!(file instanceof TFile)) {
+      if (this.isReadingRequestCurrent(root, state, request, generation)) {
+        disposeReadingRoot(root);
+      }
       return;
     }
     const markdown = await this.app.vault.read(file);
-    this.readingRoots.set(root, sourcePath);
-    decorateReadingHeadings(root, markdown, this.settings);
+    if (!this.isReadingRequestCurrent(root, state, request, generation)) {
+      return;
+    }
+    decorateReadingHeadings(root, markdown, this.settings, state.section);
   }
 
   private async refreshVirtualRendering(): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
     refreshHeadingNumberingExtensions();
     await Promise.all(
-      Array.from(this.readingRoots, async ([root, sourcePath]) => {
-        await this.decorateReadingRoot(root, sourcePath);
+      Array.from(this.readingRoots, async ([root, state]) => {
+        await this.decorateReadingRoot(root, state);
       }),
     );
+  }
+
+  private isReadingRequestCurrent(
+    root: HTMLElement,
+    state: ReadingRootState,
+    request: number,
+    generation: number,
+  ): boolean {
+    return (
+      !this.disposed &&
+      this.renderGeneration === generation &&
+      this.readingRoots.get(root) === state &&
+      state.request === request
+    );
+  }
+
+  private releaseReadingRoot(root: HTMLElement, token: object): void {
+    const state = this.readingRoots.get(root);
+    if (!state || state.token !== token) {
+      return;
+    }
+    this.readingRoots.delete(root);
+    disposeReadingRoot(root);
   }
 
   private showNotice(

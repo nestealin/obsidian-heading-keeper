@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_STORED_SETTINGS } from "../src/settings.js";
 import {
+  clearHeadingNumberingPrefixes,
   decorateReadingHeadings,
   planReadingDecorations,
 } from "../src/reading-processor.js";
@@ -12,10 +13,9 @@ class FakeElement {
   parentElement: FakeElement | undefined;
   textContent = "";
 
-  constructor(
-    readonly tagName: string,
-    readonly className = "",
-  ) {}
+  className = "";
+
+  constructor(readonly tagName: string) {}
 
   readonly ownerDocument = {
     createElement: (tagName: string) => new FakeElement(tagName.toUpperCase()),
@@ -84,6 +84,8 @@ function readingRoot(levels: number[]): FakeElement {
   return root;
 }
 
+const firstSection = { lineEnd: 0, lineStart: 0 };
+
 describe("Reading virtual decorations", () => {
   it("has prefix parity with editor decorations for CRLF and Unicode headings", () => {
     const markdown = [
@@ -102,8 +104,10 @@ describe("Reading virtual decorations", () => {
     );
 
     expect(
-      planReadingDecorations(markdown, DEFAULT_STORED_SETTINGS, [2, 4])
-        .prefixes,
+      planReadingDecorations(markdown, DEFAULT_STORED_SETTINGS, [2, 4], {
+        lineEnd: 7,
+        lineStart: 0,
+      }).prefixes,
     ).toEqual([
       { index: 0, text: "1. " },
       { index: 1, text: "1.1. " },
@@ -112,6 +116,79 @@ describe("Reading virtual decorations", () => {
       "1. ",
       "1.1. ",
     ]);
+  });
+
+  it("maps each section to a filtered full-document plan", () => {
+    const markdown = "## A\n## B";
+
+    expect(
+      planReadingDecorations(markdown, DEFAULT_STORED_SETTINGS, [2], {
+        lineEnd: 0,
+        lineStart: 0,
+      }),
+    ).toEqual({ diagnostics: [], prefixes: [{ index: 0, text: "1. " }] });
+    expect(
+      planReadingDecorations(markdown, DEFAULT_STORED_SETTINGS, [2], {
+        lineEnd: 1,
+        lineStart: 1,
+      }),
+    ).toEqual({ diagnostics: [], prefixes: [{ index: 0, text: "2. " }] });
+  });
+
+  it("preserves hierarchy for a non-first section with a different heading level", () => {
+    expect(
+      planReadingDecorations("## A\n#### B", DEFAULT_STORED_SETTINGS, [4], {
+        lineEnd: 1,
+        lineStart: 1,
+      }),
+    ).toEqual({ diagnostics: [], prefixes: [{ index: 0, text: "1.1. " }] });
+  });
+
+  it("rejects null and out-of-range section metadata without decorations", () => {
+    expect(
+      planReadingDecorations("## A", DEFAULT_STORED_SETTINGS, [2], null),
+    ).toEqual({
+      diagnostics: [
+        {
+          code: "reading-section-info-invalid",
+          index: 0,
+          message: "Reading section information is unavailable or invalid.",
+        },
+      ],
+      prefixes: [],
+    });
+    expect(
+      planReadingDecorations(
+        "## A",
+        DEFAULT_STORED_SETTINGS,
+        [2],
+        {} as unknown as { lineEnd: number; lineStart: number },
+      ),
+    ).toEqual({
+      diagnostics: [
+        {
+          code: "reading-section-info-invalid",
+          index: 0,
+          message: "Reading section information is unavailable or invalid.",
+        },
+      ],
+      prefixes: [],
+    });
+    expect(
+      planReadingDecorations("## A", DEFAULT_STORED_SETTINGS, [2], {
+        lineEnd: 1,
+        lineStart: 1,
+      }),
+    ).toEqual({
+      diagnostics: [
+        {
+          code: "reading-section-range-invalid",
+          index: 1,
+          message: "Reading section range is outside the source document.",
+        },
+      ],
+      prefixes: [],
+    });
   });
 
   it("inserts accessible owned spans and remains idempotent", () => {
@@ -123,12 +200,14 @@ describe("Reading virtual decorations", () => {
         root as unknown as HTMLElement,
         markdown,
         DEFAULT_STORED_SETTINGS,
+        { lineEnd: 1, lineStart: 0 },
       ),
     ).toEqual({ diagnostics: [] });
     decorateReadingHeadings(
       root as unknown as HTMLElement,
       markdown,
       DEFAULT_STORED_SETTINGS,
+      { lineEnd: 1, lineStart: 0 },
     );
 
     const prefixes = root.querySelectorAll(".heading-numbering-prefix");
@@ -147,6 +226,7 @@ describe("Reading virtual decorations", () => {
         root as unknown as HTMLElement,
         "## Root\n#### Child",
         DEFAULT_STORED_SETTINGS,
+        { lineEnd: 1, lineStart: 0 },
       ),
     ).toEqual({
       diagnostics: [
@@ -157,6 +237,65 @@ describe("Reading virtual decorations", () => {
         },
       ],
     });
-    expect(root.querySelectorAll(".heading-numbering-prefix")).toHaveLength(1);
+    expect(root.querySelectorAll(".heading-numbering-prefix")).toHaveLength(0);
+  });
+
+  it("keeps user spans sharing the public class while replacing only owned spans", () => {
+    const root = readingRoot([2]);
+    const heading = root.children[0];
+    const userPrefix = new FakeElement("SPAN");
+    userPrefix.className = "heading-numbering-prefix";
+    heading?.appendChild(userPrefix);
+
+    decorateReadingHeadings(
+      root as unknown as HTMLElement,
+      "## Root",
+      DEFAULT_STORED_SETTINGS,
+      firstSection,
+    );
+    clearHeadingNumberingPrefixes(root as unknown as HTMLElement);
+
+    expect(heading?.children).toEqual([userPrefix]);
+  });
+
+  it("keeps parent and nested root decorations isolated in either render order", () => {
+    const renderInOrder = (childFirst: boolean) => {
+      const parent = readingRoot([2]);
+      const child = readingRoot([2]);
+      parent.appendChild(child);
+      const renderParent = () =>
+        decorateReadingHeadings(
+          parent as unknown as HTMLElement,
+          "## Parent\n## Child",
+          DEFAULT_STORED_SETTINGS,
+          { lineEnd: 1, lineStart: 0 },
+        );
+      const renderChild = () =>
+        decorateReadingHeadings(
+          child as unknown as HTMLElement,
+          "## Parent\n## Child",
+          DEFAULT_STORED_SETTINGS,
+          { lineEnd: 1, lineStart: 1 },
+        );
+
+      if (childFirst) {
+        renderChild();
+        renderParent();
+      } else {
+        renderParent();
+        renderChild();
+      }
+      return { child, parent };
+    };
+
+    for (const childFirst of [false, true]) {
+      const { child, parent } = renderInOrder(childFirst);
+      expect(
+        parent.children[0]?.children.map((node) => node.textContent),
+      ).toEqual(["1. "]);
+      expect(
+        child.children[0]?.children.map((node) => node.textContent),
+      ).toEqual(["2. "]);
+    }
   });
 });

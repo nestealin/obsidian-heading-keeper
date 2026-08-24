@@ -7,6 +7,8 @@ const state = vi.hoisted(() => ({
   loadedData: undefined as unknown,
   notices: [] as string[],
   postProcessors: [] as unknown[],
+  renderChildren: [] as Array<{ onunload: () => void }>,
+  readQueue: [] as Promise<string>[],
   readingMarkdown: new Map<string, string>(),
   savedData: [] as unknown[],
   settingRows: [] as Array<{
@@ -30,7 +32,8 @@ vi.mock("obsidian", () => {
         modify: () => {
           state.vaultWrites += 1;
         },
-        read: async (file: TFile) => state.readingMarkdown.get(file.path) ?? "",
+        read: async (file: TFile) =>
+          state.readQueue.shift() ?? state.readingMarkdown.get(file.path) ?? "",
       },
     };
     manifest = { id: "heading-numbering" };
@@ -80,6 +83,12 @@ vi.mock("obsidian", () => {
 
   class TFile {
     constructor(readonly path: string) {}
+  }
+
+  class MarkdownRenderChild {
+    constructor(readonly containerEl: HTMLElement) {}
+
+    onunload(): void {}
   }
 
   class Setting {
@@ -140,7 +149,14 @@ vi.mock("obsidian", () => {
     }
   }
 
-  return { Notice, Plugin, PluginSettingTab, Setting, TFile };
+  return {
+    MarkdownRenderChild,
+    Notice,
+    Plugin,
+    PluginSettingTab,
+    Setting,
+    TFile,
+  };
 });
 
 import { HeadingNumberingPlugin } from "../src/main.js";
@@ -151,6 +167,8 @@ beforeEach(() => {
   state.loadedData = undefined;
   state.notices.length = 0;
   state.postProcessors.length = 0;
+  state.renderChildren.length = 0;
+  state.readQueue.length = 0;
   state.readingMarkdown.clear();
   state.savedData.length = 0;
   state.settingRows.length = 0;
@@ -296,9 +314,7 @@ describe("HeadingNumberingPlugin", () => {
       context: { sourcePath: string },
     ) => Promise<void>;
 
-    await processor(root as unknown as HTMLElement, {
-      sourcePath: "virtual.md",
-    });
+    await processor(root as unknown as HTMLElement, readingContext());
     expect(root.prefixes()).toEqual(["1. "]);
 
     await plugin.saveSettings({ ...plugin.settings, titleSeparator: " · " });
@@ -308,7 +324,127 @@ describe("HeadingNumberingPlugin", () => {
     expect(root.prefixes()).toEqual([]);
     expect(state.vaultWrites).toBe(0);
   });
+
+  it("maps separate Reading sections to global heading numbers", async () => {
+    const firstRoot = createReadingRoot(2);
+    const secondRoot = createReadingRoot(2);
+    state.readingMarkdown.set("virtual.md", "## A\n## B");
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    const processor = state.postProcessors[0] as (
+      root: HTMLElement,
+      context: ReturnType<typeof readingContext>,
+    ) => Promise<void>;
+
+    await processor(
+      firstRoot as unknown as HTMLElement,
+      readingContext({ lineEnd: 0, lineStart: 0 }),
+    );
+    await processor(
+      secondRoot as unknown as HTMLElement,
+      readingContext({ lineEnd: 1, lineStart: 1 }),
+    );
+
+    expect(firstRoot.prefixes()).toEqual(["1. "]);
+    expect(secondRoot.prefixes()).toEqual(["2. "]);
+  });
+
+  it("keeps an unloaded Reading child and a late vault read from decorating", async () => {
+    const root = createReadingRoot(2);
+    const delayed = deferred<string>();
+    state.readQueue.push(delayed.promise);
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    const processor = state.postProcessors[0] as (
+      root: HTMLElement,
+      context: ReturnType<typeof readingContext>,
+    ) => Promise<void>;
+
+    const rendering = processor(
+      root as unknown as HTMLElement,
+      readingContext(),
+    );
+    expect(state.renderChildren).toHaveLength(1);
+    state.renderChildren[0]?.onunload();
+    delayed.resolve("## Root");
+    await rendering;
+
+    expect(root.prefixes()).toEqual([]);
+    await plugin.saveSettings({ ...plugin.settings, titleSeparator: " · " });
+    expect(root.prefixes()).toEqual([]);
+  });
+
+  it("does not decorate when plugin unload precedes a vault read resolution", async () => {
+    const root = createReadingRoot(2);
+    const delayed = deferred<string>();
+    state.readQueue.push(delayed.promise);
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    const processor = state.postProcessors[0] as (
+      root: HTMLElement,
+      context: ReturnType<typeof readingContext>,
+    ) => Promise<void>;
+
+    const rendering = processor(
+      root as unknown as HTMLElement,
+      readingContext(),
+    );
+    plugin.onunload();
+    delayed.resolve("## Root");
+    await rendering;
+
+    expect(root.prefixes()).toEqual([]);
+  });
+
+  it("keeps the newest concurrent Reading request when an older read resolves late", async () => {
+    const root = createReadingRoot(2);
+    const firstRead = deferred<string>();
+    const secondRead = deferred<string>();
+    state.readQueue.push(firstRead.promise, secondRead.promise);
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    const processor = state.postProcessors[0] as (
+      root: HTMLElement,
+      context: ReturnType<typeof readingContext>,
+    ) => Promise<void>;
+    const context = readingContext({ lineEnd: 1, lineStart: 1 });
+
+    const firstRendering = processor(root as unknown as HTMLElement, context);
+    const refresh = plugin.saveSettings({ ...plugin.settings });
+    secondRead.resolve("## First\n## Second");
+    await refresh;
+    expect(root.prefixes()).toEqual(["2. "]);
+
+    firstRead.resolve("## First");
+    await firstRendering;
+    expect(root.prefixes()).toEqual(["2. "]);
+  });
 });
+
+function readingContext(
+  section: { lineEnd: number; lineStart: number } | null = {
+    lineEnd: 0,
+    lineStart: 0,
+  },
+) {
+  return {
+    addChild(child: { onunload: () => void }) {
+      state.renderChildren.push(child);
+    },
+    getSectionInfo() {
+      return section;
+    },
+    sourcePath: "virtual.md",
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 function createReadingRoot(level: number) {
   class ReadingElement {

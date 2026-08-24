@@ -11,6 +11,7 @@ describe("production bundle surface", () => {
       "utf8",
     );
     const obsidian = {
+      MarkdownRenderChild: class {},
       Notice: class {},
       Plugin,
       PluginSettingTab: class {},
