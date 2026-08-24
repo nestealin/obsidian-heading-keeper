@@ -12,9 +12,13 @@
     "format:check": "prettier --check .",
     "typecheck": "corepack pnpm -r typecheck && tsc -p scripts/tsconfig.json",
     "test": "corepack pnpm -r build && vitest --config vitest.workspace.ts run",
+    "package:plugin": "node scripts/package-plugin.mjs",
     "scan:sensitive": "node scripts/scan-sensitive.mjs",
     "scan:rejected": "node scripts/scan-rejected.mjs",
-    "verify:local": "corepack pnpm format:check && corepack pnpm typecheck && corepack pnpm test && corepack pnpm build && corepack pnpm scan:sensitive && git diff --check"
+    "scan:word-joiner": "node scripts/scan-word-joiner.mjs",
+    "verify:deployment": "node scripts/verify-deployment.mjs",
+    "verify:release": "corepack pnpm package:plugin && corepack pnpm scan:word-joiner && corepack pnpm scan:sensitive && vitest --config vitest.workspace.ts run scripts/test/release-surface.test.ts",
+    "verify:local": "corepack pnpm format:check && corepack pnpm typecheck && corepack pnpm test && corepack pnpm build && corepack pnpm scan:sensitive && corepack pnpm scan:word-joiner && git diff --check"
   },
   "devDependencies": {
     "@types/node": "22.15.3",

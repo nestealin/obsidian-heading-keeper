@@ -12,6 +12,7 @@ const repositoryRoot = resolve(
 const sensitiveScript = join(repositoryRoot, "scripts/scan-sensitive.mjs");
 const rejectedScript = join(repositoryRoot, "scripts/scan-rejected.mjs");
 const sensitiveFixture = ["token", '"abcdefgh"'].join("=");
+const wordJoinerScript = join(repositoryRoot, "scripts/scan-word-joiner.mjs");
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -39,10 +40,16 @@ async function writeFixture(
   await writeFile(file, content);
 }
 
-function runScript(script: string, arguments_: string[], cwd: string) {
+function runScript(
+  script: string,
+  arguments_: string[],
+  cwd: string,
+  environment: NodeJS.ProcessEnv = {},
+) {
   return spawnSync(process.execPath, [script, ...arguments_], {
     cwd,
     encoding: "utf8",
+    env: { ...process.env, ...environment },
   });
 }
 
@@ -107,6 +114,27 @@ describe("source scan scripts", () => {
     ).toBe(1);
   });
 
+  it("accepts rejected terms from the JSON environment array", async () => {
+    const directory = await createGitFixture();
+    await writeFixture(directory, "fixture.txt", "environment supplied phrase");
+
+    expect(
+      runScript(rejectedScript, [], directory, {
+        REJECTED_TERMS_JSON: JSON.stringify(["environment supplied phrase"]),
+      }).status,
+    ).toBe(1);
+  });
+
+  it("rejects an invalid rejected-terms JSON environment", async () => {
+    const directory = await createGitFixture();
+
+    expect(
+      runScript(rejectedScript, [], directory, {
+        REJECTED_TERMS_JSON: "not-json",
+      }).status,
+    ).toBe(2);
+  });
+
   it("exits with usage status when no rejected terms are supplied", async () => {
     const directory = await createGitFixture();
 
@@ -122,5 +150,32 @@ describe("source scan scripts", () => {
     const result = runScript(sensitiveScript, [], directory);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("not a git repository");
+  });
+
+  it("reports a word joiner in a text fixture", async () => {
+    const directory = await createGitFixture();
+    await writeFixture(
+      directory,
+      "fixture.txt",
+      `a${String.fromCodePoint(0x2060)}b`,
+    );
+
+    const result = runScript(wordJoinerScript, [], directory);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("fixture.txt");
+  });
+
+  it("skips a binary word-joiner fixture", async () => {
+    const directory = await createGitFixture();
+    await writeFixture(
+      directory,
+      "fixture.bin",
+      Buffer.concat([
+        Buffer.from([0, 1, 2]),
+        Buffer.from(String.fromCodePoint(0x2060)),
+      ]),
+    );
+
+    expect(runScript(wordJoinerScript, [], directory).status).toBe(0);
   });
 });

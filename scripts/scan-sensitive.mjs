@@ -1,4 +1,4 @@
-import { readTextSourceFiles } from "./scan-source-files.mjs";
+import { readTextReleaseFiles } from "./scan-source-files.mjs";
 
 const findings = [];
 const patterns = [
@@ -6,7 +6,7 @@ const patterns = [
   /(?:api[_-]?key|secret|token|password)\s*[:=]\s*["'][^"'\s]{8,}/iu,
 ];
 
-for (const { content, file } of await readTextSourceFiles()) {
+for (const { content, file } of await readTextReleaseFiles()) {
   if (
     content.includes("\u2060") ||
     patterns.some((pattern) => pattern.test(content))
