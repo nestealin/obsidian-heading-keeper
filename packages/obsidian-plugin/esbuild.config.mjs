@@ -3,7 +3,7 @@ import { build } from "esbuild";
 await build({
   bundle: true,
   entryPoints: ["src/main.ts"],
-  external: ["obsidian"],
+  external: ["obsidian", "@codemirror/state", "@codemirror/view"],
   format: "cjs",
   outfile: "main.js",
   platform: "node",

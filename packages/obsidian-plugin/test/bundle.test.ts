@@ -19,6 +19,29 @@ describe("production bundle surface", () => {
       Setting: class {},
       TFile: class {},
     };
+    const state = {
+      StateEffect: {
+        define: () => ({
+          is: () => false,
+          of: (value: unknown) => value,
+        }),
+      },
+    };
+    const view = {
+      Decoration: {
+        set: () => ({}),
+        widget: () => ({ range: () => ({}) }),
+      },
+      EditorView: class {},
+      ViewPlugin: { fromClass: () => ({}) },
+      WidgetType: class {},
+    };
+
+    expect(bundle).toContain('require("@codemirror/state")');
+    expect(bundle).toContain('require("@codemirror/view")');
+    expect(bundle).not.toContain(
+      "Unrecognized extension value in extension set",
+    );
 
     runInNewContext(bundle, {
       exports: module.exports,
@@ -26,6 +49,12 @@ describe("production bundle surface", () => {
       require: (identifier: string) => {
         if (identifier === "obsidian") {
           return obsidian;
+        }
+        if (identifier === "@codemirror/state") {
+          return state;
+        }
+        if (identifier === "@codemirror/view") {
+          return view;
         }
         throw new Error(`Unexpected bundle dependency: ${identifier}`);
       },
