@@ -25,6 +25,12 @@ importers:
 
   packages/core: {}
 
+  packages/link-core:
+    dependencies:
+      "@heading-numbering/core":
+        specifier: workspace:*
+        version: link:../core
+
 packages:
   "@esbuild/aix-ppc64@0.28.2":
     resolution:
