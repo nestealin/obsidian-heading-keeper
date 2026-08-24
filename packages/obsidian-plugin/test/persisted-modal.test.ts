@@ -93,7 +93,7 @@ describe("persisted modals", () => {
     },
   );
 
-  it("describes a pure file link diagnostic in Chinese", async () => {
+  it("excludes pure file links from persisted workflow diagnostics", async () => {
     const result = await buildWorkflowPreview(
       {
         kind: "add",
@@ -113,11 +113,7 @@ describe("persisted modals", () => {
     expect(result.kind).toBe("preview");
     if (result.kind !== "preview") return;
 
-    const modal = new PersistedPreviewModal({} as never, result, "zh", vi.fn());
-    modal.open();
-    expect(allText(modal.contentEl as unknown as FakeElement)).toContain(
-      "Target.md: 原因：链接没有标题片段 [missing-heading-fragment]",
-    );
+    expect(result.groups.preserved).toEqual([]);
   });
 
   it.each([

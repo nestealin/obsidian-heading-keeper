@@ -3,6 +3,7 @@ import {
   LINK_DIAGNOSTIC_CODES,
   normalizeHeadingFragment,
   planHeadingLinkChanges,
+  planRenameScopedLinkChanges,
   scanHeadingLinks,
   type LinkDiagnosticCode,
 } from "../src/index.js";
@@ -456,5 +457,40 @@ describe("planHeadingLinkChanges", () => {
         },
       ],
     });
+  });
+});
+
+describe("planRenameScopedLinkChanges", () => {
+  it("keeps diagnostics only for rename candidates and protected links to renamed targets", () => {
+    const changes = planRenameScopedLinkChanges({
+      sourcePath: "Refs.md",
+      markdown: [
+        "[[Target#Old]]",
+        "[[Target#^block]]",
+        "[[Missing#Old]]",
+        "[[Missing#Unrelated]]",
+        "[[Target]]",
+        "[web](https://example.com/#Old)",
+      ].join(" "),
+      renames: [
+        {
+          targetPath: "Target.md",
+          oldHeading: "Old",
+          newHeading: "1. Old",
+        },
+      ],
+      resolveTarget: (_sourcePath, linkPath) =>
+        linkPath === "Target"
+          ? { kind: "file", path: "Target.md" }
+          : { kind: "missing" },
+    });
+
+    expect(changes.edits.map(({ replacement }) => replacement)).toEqual([
+      "[[Target#1. Old]]",
+    ]);
+    expect(changes.diagnostics.map(({ code }) => code)).toEqual([
+      "block-reference",
+      "target-missing",
+    ]);
   });
 });

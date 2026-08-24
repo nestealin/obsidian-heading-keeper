@@ -5,7 +5,7 @@ import {
   type NumberingPlanEntry,
 } from "@heading-numbering/core";
 import {
-  planHeadingLinkChanges,
+  planRenameScopedLinkChanges,
   type HeadingRename,
   type LinkDiagnosticCode,
   type ResolvedTarget,
@@ -229,7 +229,7 @@ export async function buildWorkflowPreview(
       left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
     )
     .map((source) => {
-      const linkPlan = planHeadingLinkChanges({
+      const linkPlan = planRenameScopedLinkChanges({
         sourcePath: source.path,
         markdown: source.text,
         renames,

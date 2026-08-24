@@ -1,5 +1,8 @@
 export { normalizeHeadingFragment } from "./fragments.js";
-export { planHeadingLinkChanges } from "./planner.js";
+export {
+  planHeadingLinkChanges,
+  planRenameScopedLinkChanges,
+} from "./planner.js";
 export { scanHeadingLinks } from "./tokenizer.js";
 export { LINK_DIAGNOSTIC_CODES } from "./types.js";
 export type {

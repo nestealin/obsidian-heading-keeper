@@ -67,23 +67,97 @@ function encodeWikiHeadingFragment(heading: string): string {
   return encoded;
 }
 
+function renamesByIdentity(
+  renames: readonly HeadingRename[],
+): Map<string, HeadingRename[]> {
+  const result = new Map<string, HeadingRename[]>();
+  for (const rename of renames) {
+    const key = identity(rename);
+    if (key === null) continue;
+    const matches = result.get(key);
+    if (matches) {
+      matches.push(rename);
+    } else {
+      result.set(key, [rename]);
+    }
+  }
+  return result;
+}
+
+function normalizedRenameHeadings(
+  renames: readonly HeadingRename[],
+): ReadonlySet<string> {
+  const headings = new Set<string>();
+  for (const rename of renames) {
+    const heading = normalizeHeadingFragment(rename.oldHeading);
+    if (heading.ok) headings.add(heading.value);
+  }
+  return headings;
+}
+
+function normalizedRenameTargets(
+  renames: readonly HeadingRename[],
+): ReadonlySet<string> {
+  const targets = new Set<string>();
+  for (const rename of renames) {
+    const target = normalizeTargetPath(rename.targetPath);
+    if (target !== null) targets.add(target);
+  }
+  return targets;
+}
+
+function appendTargetDiagnostic(
+  diagnostics: LinkDiagnostic[],
+  token: LinkToken,
+  target: ResolvedTarget,
+): string | null {
+  if (target.kind === "missing") {
+    diagnostics.push(
+      diagnostic(token, "target-missing", "Link target could not be resolved."),
+    );
+    return null;
+  }
+  if (target.kind === "ambiguous") {
+    diagnostics.push(
+      diagnostic(
+        token,
+        "target-ambiguous",
+        "Link target resolved to more than one file.",
+      ),
+    );
+    return null;
+  }
+  if (target.kind === "external") {
+    diagnostics.push(
+      diagnostic(
+        token,
+        "target-external",
+        "Resolver classified the target as external.",
+      ),
+    );
+    return null;
+  }
+  const targetPath = normalizeTargetPath(target.path);
+  if (targetPath === null) {
+    diagnostics.push(
+      diagnostic(
+        token,
+        "target-path-invalid",
+        "Resolver returned a path outside the vault-relative identity domain.",
+      ),
+    );
+    return null;
+  }
+  return targetPath;
+}
+
 export function planHeadingLinkChanges({
   sourcePath,
   markdown,
   renames,
   resolveTarget,
 }: PlanHeadingLinkChangesInput): LinkPlan {
-  const renamesByIdentity = new Map<string, HeadingRename[]>();
-  for (const rename of renames) {
-    const key = identity(rename);
-    if (key === null) continue;
-    const matches = renamesByIdentity.get(key);
-    if (matches) {
-      matches.push(rename);
-    } else {
-      renamesByIdentity.set(key, [rename]);
-    }
-  }
+  const renameMap = renamesByIdentity(renames);
 
   const edits: LinkEdit[] = [];
   const diagnostics: LinkDiagnostic[] = [];
@@ -183,9 +257,101 @@ export function planHeadingLinkChanges({
       );
       continue;
     }
-    const matches = renamesByIdentity.get(
-      `${targetPath}\u0000${fragment.value}`,
-    );
+    const matches = renameMap.get(`${targetPath}\u0000${fragment.value}`);
+    if (!matches) continue;
+    if (matches.length !== 1) {
+      diagnostics.push(
+        diagnostic(
+          token,
+          "duplicate-heading-rename",
+          "Multiple renames share the same normalized file and heading identity.",
+        ),
+      );
+      continue;
+    }
+    const rename = matches[0];
+    if (!rename) continue;
+    const localFrom = token.fragmentRange.from - token.range.from;
+    const localTo = token.fragmentRange.to - token.range.from;
+    const newFragment =
+      token.kind === "wiki" || token.kind === "embed"
+        ? encodeWikiHeadingFragment(rename.newHeading)
+        : encodeURIComponent(rename.newHeading.normalize("NFC"));
+    edits.push({
+      range: token.range,
+      replacement:
+        token.raw.slice(0, localFrom) + newFragment + token.raw.slice(localTo),
+      targetPath,
+      reason: "unique-heading-rename",
+    });
+  }
+
+  edits.sort((left, right) => left.range.from - right.range.from);
+  diagnostics.sort(
+    (left, right) => left.sourceRange.from - right.sourceRange.from,
+  );
+  return { edits, diagnostics };
+}
+
+export function planRenameScopedLinkChanges({
+  sourcePath,
+  markdown,
+  renames,
+  resolveTarget,
+}: PlanHeadingLinkChangesInput): LinkPlan {
+  const renameMap = renamesByIdentity(renames);
+  const renameHeadings = normalizedRenameHeadings(renames);
+  const renameTargets = normalizedRenameTargets(renames);
+  const edits: LinkEdit[] = [];
+  const diagnostics: LinkDiagnostic[] = [];
+
+  for (const token of scanHeadingLinks(markdown)) {
+    if (token.rawFragment === null || token.fragmentRange === null) continue;
+    if (isExternalLinkPath(token.linkPath)) continue;
+
+    const fragment = normalizeHeadingFragment(token.rawFragment);
+    if (!fragment.ok) continue;
+
+    if (fragment.value.startsWith("^")) {
+      let target: ResolvedTarget;
+      try {
+        target = resolveTarget(sourcePath, token.linkPath);
+      } catch {
+        continue;
+      }
+      if (target.kind !== "file") continue;
+      const targetPath = normalizeTargetPath(target.path);
+      if (targetPath !== null && renameTargets.has(targetPath)) {
+        diagnostics.push(
+          diagnostic(
+            token,
+            "block-reference",
+            "Block references are not heading rename targets.",
+          ),
+        );
+      }
+      continue;
+    }
+
+    if (!renameHeadings.has(fragment.value)) continue;
+
+    let target: ResolvedTarget;
+    try {
+      target = resolveTarget(sourcePath, token.linkPath);
+    } catch {
+      diagnostics.push(
+        diagnostic(
+          token,
+          "target-resolution-error",
+          "Target resolution failed.",
+        ),
+      );
+      continue;
+    }
+    const targetPath = appendTargetDiagnostic(diagnostics, token, target);
+    if (targetPath === null) continue;
+
+    const matches = renameMap.get(`${targetPath}\u0000${fragment.value}`);
     if (!matches) continue;
     if (matches.length !== 1) {
       diagnostics.push(

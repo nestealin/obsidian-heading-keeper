@@ -146,6 +146,86 @@ describe("buildWorkflowPreview", () => {
     expect(result.operation.files).toHaveLength(1);
   });
 
+  it("keeps workflow diagnostics scoped to current renames without changing edit files or order", async () => {
+    const result = await buildWorkflowPreview(
+      {
+        kind: "add",
+        targetPath: "Target.md",
+        sources: [
+          { path: "Target.md", text: "## Alpha" },
+          {
+            path: "Links.md",
+            text: [
+              "[[Target#Alpha]]",
+              "[[Target#^block]]",
+              "[[Missing#Alpha]]",
+              "[[Missing#Unrelated]]",
+              "[[Target]]",
+              "[web](https://example.com/#Alpha)",
+            ].join(" "),
+          },
+          { path: "Unrelated.md", text: "[[Missing#Elsewhere]]" },
+        ],
+        settings,
+        resolveTarget: (_source, linkPath) =>
+          linkPath === "Target"
+            ? { kind: "file", path: "Target.md" }
+            : { kind: "missing" },
+      },
+      deps,
+    );
+
+    expect(result.kind).toBe("preview");
+    if (result.kind !== "preview") return;
+    expect(
+      result.operation.files.map(({ path, role }) => ({ path, role })),
+    ).toEqual([
+      { path: "Target.md", role: "target" },
+      { path: "Links.md", role: "link-source" },
+    ]);
+    expect(result.groups.linkSources).toEqual([
+      {
+        path: "Links.md",
+        edits: [
+          {
+            range: { from: 0, to: 16 },
+            expectedText: "[[Target#Alpha]]",
+            replacementText: "[[Target#1. Alpha]]",
+          },
+        ],
+      },
+    ]);
+    expect(result.groups.preserved).toEqual([
+      { path: "Links.md", code: "block-reference" },
+      { path: "Links.md", code: "target-missing" },
+    ]);
+  });
+
+  it("retains a related block-reference-only source in workflow diagnostics", async () => {
+    const result = await buildWorkflowPreview(
+      {
+        kind: "add",
+        targetPath: "Target.md",
+        sources: [
+          { path: "Target.md", text: "## Alpha" },
+          { path: "Blocks.md", text: "[[Target#^block]]" },
+        ],
+        settings,
+        resolveTarget: () => ({ kind: "file", path: "Target.md" }),
+      },
+      deps,
+    );
+
+    expect(result.kind).toBe("preview");
+    if (result.kind !== "preview") return;
+    expect(result.operation.files.map(({ path }) => path)).toEqual([
+      "Target.md",
+    ]);
+    expect(result.groups.preserved).toEqual([
+      { path: "Blocks.md", code: "block-reference" },
+    ]);
+  });
+
   it("removes only the exact current prefix while preserving closing syntax and CRLF", async () => {
     const result = await buildWorkflowPreview(
       {
