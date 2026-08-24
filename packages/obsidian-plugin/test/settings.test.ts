@@ -13,6 +13,7 @@ describe("plugin stored settings", () => {
       numberSeparator: ".",
       titleSeparator: ". ",
       gapStrategy: "compact",
+      mode: "virtual",
       locale: "auto",
     });
   });
@@ -40,6 +41,28 @@ describe("plugin stored settings", () => {
     expect(result).toEqual({
       ok: false,
       errors: [{ field: "locale", message: "Expected auto, en, or zh." }],
+    });
+  });
+
+  it("keeps an explicit persisted mode and rejects invalid modes", () => {
+    expect(
+      validateStoredSettings({
+        ...DEFAULT_STORED_SETTINGS,
+        mode: "persisted",
+      }),
+    ).toEqual({
+      ok: true,
+      value: { ...DEFAULT_STORED_SETTINGS, mode: "persisted" },
+    });
+
+    expect(
+      validateStoredSettings({
+        ...DEFAULT_STORED_SETTINGS,
+        mode: "background",
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [{ field: "mode", message: "Expected virtual or persisted." }],
     });
   });
 });

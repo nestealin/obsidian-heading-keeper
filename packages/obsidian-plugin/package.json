@@ -6,7 +6,7 @@
   "scripts": {
     "build": "node esbuild.config.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "node esbuild.config.mjs && vitest run"
   },
   "dependencies": {
     "@heading-numbering/core": "workspace:*",

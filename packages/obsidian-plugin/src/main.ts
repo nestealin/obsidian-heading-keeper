@@ -7,6 +7,7 @@ import {
 } from "./i18n.js";
 import {
   DEFAULT_STORED_SETTINGS,
+  type NumberingMode,
   type StoredSettings,
   validateStoredSettings,
 } from "./settings.js";
@@ -23,7 +24,7 @@ const commandIds = {
   remove: "remove-confirmed",
 } as const;
 
-class HeadingNumberingSettingTab extends PluginSettingTab {
+export class HeadingNumberingSettingTab extends PluginSettingTab {
   constructor(
     app: App,
     private readonly headingNumbering: HeadingNumberingPlugin,
@@ -38,6 +39,71 @@ class HeadingNumberingSettingTab extends PluginSettingTab {
     containerEl.createEl("h2", { text: translate(locale, "settings.heading") });
 
     new Setting(containerEl)
+      .setName(translate(locale, "settings.mode"))
+      .setDesc(translate(locale, "settings.modeDescription"))
+      .addDropdown((dropdown) => {
+        dropdown
+          .addOption("virtual", translate(locale, "mode.virtual"))
+          .addOption("persisted", translate(locale, "mode.persisted"))
+          .setValue(this.headingNumbering.settings.mode)
+          .onChange(async (value) => {
+            await this.save({ mode: value as NumberingMode });
+          });
+      });
+
+    this.addNumberField(
+      locale,
+      "settings.topLevel",
+      "settings.topLevelDescription",
+      this.headingNumbering.settings.topLevel,
+      (topLevel) => ({ topLevel }),
+    );
+    this.addNumberField(
+      locale,
+      "settings.bottomLevel",
+      "settings.bottomLevelDescription",
+      this.headingNumbering.settings.bottomLevel,
+      (bottomLevel) => ({ bottomLevel }),
+    );
+    this.addNumberField(
+      locale,
+      "settings.startAt",
+      "settings.startAtDescription",
+      this.headingNumbering.settings.startAt,
+      (startAt) => ({ startAt }),
+    );
+    this.addTextField(
+      locale,
+      "settings.numberSeparator",
+      "settings.numberSeparatorDescription",
+      this.headingNumbering.settings.numberSeparator,
+      (numberSeparator) => ({ numberSeparator }),
+    );
+    this.addTextField(
+      locale,
+      "settings.titleSeparator",
+      "settings.titleSeparatorDescription",
+      this.headingNumbering.settings.titleSeparator,
+      (titleSeparator) => ({ titleSeparator }),
+    );
+    new Setting(containerEl)
+      .setName(translate(locale, "settings.gapStrategy"))
+      .setDesc(translate(locale, "settings.gapStrategyDescription"))
+      .addDropdown((dropdown) => {
+        dropdown
+          .addOption("zero-fill", translate(locale, "gapStrategy.zeroFill"))
+          .addOption("one-fill", translate(locale, "gapStrategy.oneFill"))
+          .addOption("compact", translate(locale, "gapStrategy.compact"))
+          .addOption("skip", translate(locale, "gapStrategy.skip"))
+          .setValue(this.headingNumbering.settings.gapStrategy)
+          .onChange(async (gapStrategy) => {
+            await this.save({
+              gapStrategy: gapStrategy as StoredSettings["gapStrategy"],
+            });
+          });
+      });
+
+    new Setting(containerEl)
       .setName(translate(locale, "settings.locale"))
       .setDesc(translate(locale, "settings.localeDescription"))
       .addDropdown((dropdown) => {
@@ -46,12 +112,8 @@ class HeadingNumberingSettingTab extends PluginSettingTab {
           .addOption("en", translate(locale, "locale.en"))
           .addOption("zh", translate(locale, "locale.zh"))
           .setValue(this.headingNumbering.settings.locale)
-          .onChange(async (value) => {
-            await this.headingNumbering.saveSettings({
-              ...this.headingNumbering.settings,
-              locale: value as LocalePreference,
-            });
-            this.display();
+          .onChange(async (localePreference) => {
+            await this.save({ locale: localePreference as LocalePreference });
           });
       });
 
@@ -65,6 +127,53 @@ class HeadingNumberingSettingTab extends PluginSettingTab {
           .join(", ")}`,
       });
     }
+  }
+
+  private addNumberField(
+    locale: Locale,
+    name: "settings.topLevel" | "settings.bottomLevel" | "settings.startAt",
+    description:
+      | "settings.topLevelDescription"
+      | "settings.bottomLevelDescription"
+      | "settings.startAtDescription",
+    value: number,
+    update: (value: number) => Record<string, unknown>,
+  ): void {
+    new Setting(this.containerEl)
+      .setName(translate(locale, name))
+      .setDesc(translate(locale, description))
+      .addText((text) => {
+        text.setValue(String(value)).onChange(async (nextValue) => {
+          await this.save(update(Number(nextValue)));
+        });
+      });
+  }
+
+  private addTextField(
+    locale: Locale,
+    name: "settings.numberSeparator" | "settings.titleSeparator",
+    description:
+      | "settings.numberSeparatorDescription"
+      | "settings.titleSeparatorDescription",
+    value: string,
+    update: (value: string) => Record<string, unknown>,
+  ): void {
+    new Setting(this.containerEl)
+      .setName(translate(locale, name))
+      .setDesc(translate(locale, description))
+      .addText((text) => {
+        text.setValue(value).onChange(async (nextValue) => {
+          await this.save(update(nextValue));
+        });
+      });
+  }
+
+  private async save(update: Record<string, unknown>): Promise<void> {
+    await this.headingNumbering.saveSettings({
+      ...this.headingNumbering.settings,
+      ...update,
+    });
+    this.display();
   }
 }
 
@@ -148,3 +257,5 @@ export class HeadingNumberingPlugin extends Plugin {
     new Notice(translate(this.currentLocale(), key));
   }
 }
+
+export default HeadingNumberingPlugin;
