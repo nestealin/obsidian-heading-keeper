@@ -42,6 +42,7 @@ export type TranslationKey =
   | "notices.applyRecovery"
   | "notices.operationError"
   | "notices.storageError"
+  | "notices.settingsSaving"
   | "notices.recoveryAvailable"
   | "notices.recoveryNone"
   | "notices.restoreCompleted"
@@ -126,12 +127,13 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
       "Writing stopped. Open recovery before continuing.",
     "notices.operationError": "The persisted operation could not be completed.",
     "notices.storageError": "Plugin data could not be saved.",
+    "notices.settingsSaving": "Settings are still being saved.",
     "notices.recoveryAvailable": "A persisted operation requires recovery.",
     "notices.recoveryNone": "No persisted operation requires recovery.",
     "notices.restoreCompleted": "Eligible files were restored.",
     "modal.preview.aria": "Persisted numbering preview",
     "modal.preview.target": "Target heading edits",
-    "modal.preview.links": "Link sources",
+    "modal.preview.links": "Link edits",
     "modal.preview.preserved": "Preserved items",
     "modal.preview.skips": "Skipped headings",
     "modal.preview.boundary": "Recovery boundary",
@@ -205,12 +207,13 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     "notices.applyRecovery": "写入已停止，请先打开恢复中心。",
     "notices.operationError": "无法完成写入事务。",
     "notices.storageError": "无法保存插件数据。",
+    "notices.settingsSaving": "设置仍在保存中。",
     "notices.recoveryAvailable": "存在需要恢复的写入事务。",
     "notices.recoveryNone": "当前没有需要恢复的写入事务。",
     "notices.restoreCompleted": "可恢复文件已还原。",
     "modal.preview.aria": "标题编号写入预览",
     "modal.preview.target": "目标标题编辑",
-    "modal.preview.links": "链接来源",
+    "modal.preview.links": "链接编辑",
     "modal.preview.preserved": "保留项",
     "modal.preview.skips": "跳过的标题",
     "modal.preview.boundary": "恢复边界",

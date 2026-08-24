@@ -259,6 +259,7 @@ export class HeadingNumberingPlugin extends Plugin {
   private lifecycleGeneration = 0;
   private previewGeneration = 0;
   private previewWasInvalidated = false;
+  private settingsSaveInFlight = 0;
   private dataStore: PluginDataStore | null = null;
   private vaultAdapter: ObsidianVaultFileAdapter | null = null;
   private currentPreview: Extract<
@@ -269,6 +270,7 @@ export class HeadingNumberingPlugin extends Plugin {
   private previewModal: {
     planId: string;
     modal: PersistedPreviewModal;
+    nonce: object;
   } | null = null;
   private readonly recoveryNonces = new Map<string, object>();
   private readonly recoveryInFlight = new Map<string, object>();
@@ -400,33 +402,39 @@ export class HeadingNumberingPlugin extends Plugin {
       this.settingsErrors = validation.errors;
       return false;
     }
-    if (!this.dataStore) {
-      this.dataStore = new PluginDataStore(
-        () => this.loadData(),
-        (value) => this.saveData(value),
-        sha256Text,
-      );
-      await this.dataStore.initialize();
-    }
-    let saved: Awaited<ReturnType<PluginDataStore["saveSettings"]>>;
+    this.settingsSaveInFlight += 1;
+    this.invalidatePersistedPreview();
     try {
-      saved = await this.dataStore.saveSettings(validation.value);
+      if (!this.dataStore) {
+        this.dataStore = new PluginDataStore(
+          () => this.loadData(),
+          (value) => this.saveData(value),
+          sha256Text,
+        );
+        await this.dataStore.initialize();
+      }
+      const saved = await this.dataStore.saveSettings(validation.value);
+      if (!saved.ok) {
+        this.settingsErrors = [...saved.errors];
+        return false;
+      }
+      this.settings = saved.settings;
+      this.settingsErrors = [];
+      await this.refreshVirtualRendering();
+      return true;
     } catch {
       this.showNotice("notices.storageError");
       return false;
+    } finally {
+      this.settingsSaveInFlight -= 1;
     }
-    if (!saved.ok) {
-      this.settingsErrors = [...saved.errors];
-      return false;
-    }
-    this.invalidatePersistedPreview();
-    this.settings = saved.settings;
-    this.settingsErrors = [];
-    await this.refreshVirtualRendering();
-    return true;
   }
 
   async previewPersisted(kind: WorkflowPreviewKind): Promise<void> {
+    if (this.settingsSaveInFlight > 0) {
+      this.showNotice("notices.settingsSaving");
+      return;
+    }
     if (this.settings.mode !== "persisted") {
       this.showNotice("notices.persistedModeRequired");
       return;
@@ -473,22 +481,19 @@ export class HeadingNumberingPlugin extends Plugin {
         return;
       }
       this.currentPreview = result;
+      const nonce = {};
       let modal: PersistedPreviewModal;
       modal = new PersistedPreviewModal(
         this.app,
         result,
         this.currentLocale(),
-        () => {
-          if (this.currentPreview === result && !this.disposed) {
-            void this.applyExactPreview(result);
-          }
-        },
+        () => this.confirmPreviewModal(result, nonce),
         () => {
           this.openModals.delete(modal);
-          if (this.previewModal?.modal === modal) this.previewModal = null;
+          if (this.previewModal?.nonce === nonce) this.previewModal = null;
         },
       );
-      this.previewModal = { planId: result.planId, modal };
+      this.previewModal = { planId: result.planId, modal, nonce };
       this.openModals.add(modal);
       modal.open();
       this.showNotice("notices.previewReady");
@@ -500,6 +505,10 @@ export class HeadingNumberingPlugin extends Plugin {
   }
 
   async applyCurrentPreview(): Promise<void> {
+    if (this.settingsSaveInFlight > 0) {
+      this.showNotice("notices.settingsSaving");
+      return;
+    }
     if (this.settings.mode !== "persisted") {
       this.showNotice("notices.persistedModeRequired");
       return;
@@ -514,6 +523,24 @@ export class HeadingNumberingPlugin extends Plugin {
       return;
     }
     await this.applyExactPreview(preview);
+  }
+
+  private confirmPreviewModal(
+    preview: Extract<WorkflowPreviewResult, { kind: "preview" }>,
+    nonce: object,
+  ): void {
+    const authority = this.previewModal;
+    if (
+      this.disposed ||
+      !authority ||
+      authority.nonce !== nonce ||
+      authority.planId !== preview.planId ||
+      this.currentPreview !== preview
+    ) {
+      return;
+    }
+    this.previewModal = null;
+    void this.applyExactPreview(preview);
   }
 
   openSettings(): void {
@@ -612,7 +639,7 @@ export class HeadingNumberingPlugin extends Plugin {
           ? "notices.restoreCompleted"
           : "notices.applyRecovery",
       );
-      nextOperation = result.operation;
+      if (result.kind !== "restored") nextOperation = result.operation;
     } catch {
       if (!this.disposed && generation === this.lifecycleGeneration) {
         this.showNotice("notices.operationError");
@@ -636,6 +663,10 @@ export class HeadingNumberingPlugin extends Plugin {
   private async applyExactPreview(
     preview: Extract<WorkflowPreviewResult, { kind: "preview" }>,
   ): Promise<void> {
+    if (this.settingsSaveInFlight > 0) {
+      this.showNotice("notices.settingsSaving");
+      return;
+    }
     const active = this.app.workspace.getActiveFile();
     if (
       this.disposed ||
@@ -704,6 +735,7 @@ export class HeadingNumberingPlugin extends Plugin {
     return (
       !this.disposed &&
       generation === this.previewGeneration &&
+      this.settingsSaveInFlight === 0 &&
       this.settings.mode === "persisted" &&
       this.app.workspace.getActiveFile()?.path === targetPath
     );
@@ -888,6 +920,7 @@ export class HeadingNumberingPlugin extends Plugin {
       | "notices.applyRecovery"
       | "notices.operationError"
       | "notices.storageError"
+      | "notices.settingsSaving"
       | "notices.recoveryAvailable"
       | "notices.recoveryNone"
       | "notices.restoreCompleted",

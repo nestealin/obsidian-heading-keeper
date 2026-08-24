@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   readQueue: [] as Promise<string>[],
   reads: 0,
   savedData: [] as unknown[],
+  saveQueue: [] as Promise<void>[],
   saveError: false,
   settingAvailable: true,
   settingOpens: 0,
@@ -93,6 +94,8 @@ vi.mock("obsidian", () => {
       return state.loadedData;
     }
     async saveData(value: unknown) {
+      const queued = state.saveQueue.shift();
+      if (queued) await queued;
       if (state.saveError) throw new Error("storage");
       state.savedData.push(value);
     }
@@ -206,6 +209,7 @@ beforeEach(() => {
   state.readQueue.length = 0;
   state.reads = 0;
   state.savedData.length = 0;
+  state.saveQueue.length = 0;
   state.saveError = false;
   state.settingAvailable = true;
   state.settingOpens = 0;
@@ -288,6 +292,46 @@ describe("persisted plugin workflow", () => {
     expect(state.writes).toEqual([["Target.md", "## 1. Alpha"]]);
   });
 
+  it("revokes only the closed preview modal nonce and keeps command authority", async () => {
+    state.activePath = "Target.md";
+    state.files.set("Target.md", "## Alpha");
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    await plugin.previewPersisted("add");
+    const modal = state.modals.at(-1) as { close(): void };
+    const staleButton = state.modalButtons.at(-1);
+
+    modal.close();
+    staleButton?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(state.writes).toEqual([]);
+    expect(plugin.activePreview).not.toBeNull();
+    await plugin.applyCurrentPreview();
+    expect(state.writes).toEqual([["Target.md", "## 1. Alpha"]]);
+  });
+
+  it("invalidates an older modal nonce when a newer preview opens", async () => {
+    state.activePath = "Target.md";
+    state.files.set("Target.md", "## Alpha");
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    await plugin.previewPersisted("add");
+    const oldButton = state.modalButtons.at(-1);
+    await plugin.previewPersisted("add");
+    const currentButton = state.modalButtons.at(-1);
+
+    oldButton?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(state.writes).toEqual([]);
+
+    currentButton?.click();
+    await vi.waitFor(() => {
+      expect(state.files.get("Target.md")).toBe("## 1. Alpha");
+    });
+    expect(state.writes).toEqual([["Target.md", "## 1. Alpha"]]);
+  });
+
   it("invalidates preview on settings and active-file changes", async () => {
     state.activePath = "Target.md";
     state.files.set("Target.md", "## Alpha");
@@ -306,13 +350,12 @@ describe("persisted plugin workflow", () => {
     expect(state.writes).toEqual([]);
   });
 
-  it("keeps settings and preview authority when storage rejects a settings save", async () => {
+  it("keeps settings but invalidates preview when storage rejects a settings save", async () => {
     state.activePath = "Target.md";
     state.files.set("Target.md", "## Alpha");
     const plugin = new HeadingNumberingPlugin();
     await plugin.onload();
     await plugin.previewPersisted("add");
-    const preview = plugin.activePreview;
     state.saveError = true;
 
     await expect(
@@ -320,8 +363,49 @@ describe("persisted plugin workflow", () => {
     ).resolves.toBe(false);
 
     expect(plugin.settings.titleSeparator).toBe(". ");
-    expect(plugin.activePreview).toBe(preview);
+    expect(plugin.activePreview).toBeNull();
     expect(state.notices.at(-1)).toBe("Plugin data could not be saved.");
+  });
+
+  it("gates preview and apply throughout concurrent settings saves", async () => {
+    state.activePath = "Target.md";
+    state.files.set("Target.md", "## Alpha");
+    const firstGate = deferred<void>();
+    const secondGate = deferred<void>();
+    state.saveQueue.push(firstGate.promise, secondGate.promise);
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    await plugin.previewPersisted("add");
+    const readsBeforeSaves = state.reads;
+
+    const firstSave = plugin.saveSettings({
+      ...plugin.settings,
+      titleSeparator: " · ",
+    });
+    const secondSave = plugin.saveSettings({
+      ...plugin.settings,
+      numberSeparator: "-",
+    });
+
+    expect(plugin.activePreview).toBeNull();
+    await plugin.previewPersisted("add");
+    await plugin.applyCurrentPreview();
+    expect(state.reads).toBe(readsBeforeSaves);
+    expect(state.notices.slice(-2)).toEqual([
+      "Settings are still being saved.",
+      "Settings are still being saved.",
+    ]);
+
+    firstGate.resolve(undefined);
+    await firstSave;
+    await plugin.previewPersisted("add");
+    expect(state.reads).toBe(readsBeforeSaves);
+    expect(state.notices.at(-1)).toBe("Settings are still being saved.");
+
+    secondGate.resolve(undefined);
+    await secondSave;
+    await plugin.previewPersisted("add");
+    expect(state.reads).toBeGreaterThan(readsBeforeSaves);
   });
 
   it("keeps a stale source at zero writes through executor preflight", async () => {
@@ -487,7 +571,9 @@ describe("persisted plugin workflow", () => {
       };
       expect(latest.journals?.["pending-only"]?.state).toBe("restored");
     });
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(state.writes).toEqual([]);
+    expect(state.modals).toHaveLength(1);
   });
 
   it("drops a late preview callback after unload", async () => {

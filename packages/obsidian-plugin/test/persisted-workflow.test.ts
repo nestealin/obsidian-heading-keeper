@@ -68,6 +68,42 @@ describe("buildWorkflowPreview", () => {
     ]);
   });
 
+  it("keeps same-target heading-link edits in the complete preview", async () => {
+    const result = await buildWorkflowPreview(
+      {
+        kind: "add",
+        targetPath: "Target.md",
+        sources: [{ path: "Target.md", text: "## Alpha\n[[#Alpha]]" }],
+        settings,
+        resolveTarget: (sourcePath, linkPath) => {
+          expect([sourcePath, linkPath]).toEqual(["Target.md", ""]);
+          return { kind: "file", path: "Target.md" };
+        },
+      },
+      deps,
+    );
+
+    expect(result.kind).toBe("preview");
+    if (result.kind !== "preview") return;
+    expect(result.operation.files).toHaveLength(1);
+    expect(result.operation.files[0]?.afterText).toBe(
+      "## 1. Alpha\n[[#1. Alpha]]",
+    );
+    expect(result.groups.targetEdits).toHaveLength(1);
+    expect(result.groups.linkSources).toEqual([
+      {
+        path: "Target.md",
+        edits: [
+          {
+            range: { from: 9, to: 19 },
+            expectedText: "[[#Alpha]]",
+            replacementText: "[[#1. Alpha]]",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("returns no-op for a note with no safely owned changes", async () => {
     const result = await buildWorkflowPreview(
       {

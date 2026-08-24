@@ -49,8 +49,58 @@ import {
   PersistedPreviewModal,
   RecoveryCenterModal,
 } from "../src/persisted-modal.js";
+import { buildWorkflowPreview } from "../src/persisted-workflow.js";
+import { sha256Text } from "../src/persistence/plan-service.js";
+import { DEFAULT_STORED_SETTINGS } from "../src/settings.js";
 
 describe("persisted modals", () => {
+  it.each([
+    ["en", "Add persisted numbering — Target.md", "Link edits (1)"],
+    ["zh", "写入标题编号 — Target.md", "链接编辑 (1)"],
+  ] as const)(
+    "shows both real same-note operation changes in %s",
+    async (locale, action, linkHeading) => {
+      const result = await buildWorkflowPreview(
+        {
+          kind: "add",
+          targetPath: "Target.md",
+          sources: [{ path: "Target.md", text: "## Alpha\n[[#Alpha]]" }],
+          settings: {
+            ...DEFAULT_STORED_SETTINGS,
+            mode: "persisted",
+          },
+          resolveTarget: () => ({ kind: "file", path: "Target.md" }),
+        },
+        {
+          createId: () => "same-note",
+          now: () => "2026-08-25T00:00:00.000Z",
+          hashText: sha256Text,
+        },
+      );
+      expect(result.kind).toBe("preview");
+      if (result.kind !== "preview") return;
+      expect(result.operation.files[0]?.afterText).toBe(
+        "## 1. Alpha\n[[#1. Alpha]]",
+      );
+
+      const modal = new PersistedPreviewModal(
+        {} as never,
+        result,
+        locale,
+        vi.fn(),
+      );
+      modal.open();
+      expect(allText(modal.contentEl as unknown as FakeElement)).toEqual(
+        expect.arrayContaining([
+          action,
+          linkHeading,
+          "3-8: Alpha → 1. Alpha",
+          "Target.md 9-19: [[#Alpha]] → [[#1. Alpha]]",
+        ]),
+      );
+    },
+  );
+
   it("renders accessible preview groups and requires an explicit button", () => {
     state.buttons.length = 0;
     const confirm = vi.fn();
@@ -76,6 +126,11 @@ describe("persisted modals", () => {
                   expectedText: "[[#A]]",
                   replacementText: "[[#1. A]]",
                 },
+                {
+                  range: { from: 12, to: 22 },
+                  expectedText: "[[#B]]",
+                  replacementText: "[[#1. B]]",
+                },
               ],
             },
           ],
@@ -98,12 +153,15 @@ describe("persisted modals", () => {
       expect.arrayContaining([
         "Add persisted numbering — Target.md",
         "Target heading edits (1)",
-        "Link sources (1)",
+        "Link edits (2)",
         "Preserved items (1)",
         "Skipped headings (1)",
         "Recovery boundary",
         "3-4: A → 1. A",
         "Links.md 0-10: [[#A]] → [[#1. A]]",
+        "Links.md 12-22: [[#B]] → [[#1. B]]",
+        "Other.md: Reason: Ambiguous target [target-ambiguous]",
+        "Target.md: Reason: Missing parent heading [missing-parent]",
         "All source hashes are checked before the first write.",
         "Externally changed files are preserved during recovery.",
       ]),
@@ -131,8 +189,8 @@ describe("persisted modals", () => {
             },
           ],
           linkSources: [],
-          preserved: [],
-          skips: [],
+          preserved: [{ path: "目标.md", code: "semantic-prefix" }],
+          skips: [{ path: "目标.md", code: "future-code" }],
           recoveryBoundary: ["source-hash-preflight"],
         },
       },
@@ -145,6 +203,8 @@ describe("persisted modals", () => {
       expect.arrayContaining([
         "移除写入编号 — 目标.md",
         "3-6: 1.  → （空）",
+        "目标.md: 原因：语义相似的编号前缀 [semantic-prefix]",
+        "目标.md: 原因：future-code",
         "首次写入前会校验所有来源哈希。",
       ]),
     );

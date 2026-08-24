@@ -232,9 +232,7 @@ export async function buildWorkflowPreview(
   const groups: PreviewGroups = {
     targetEdits,
     linkSources: linkSources
-      .filter(
-        (source) => source.edits.length > 0 && source.path !== input.targetPath,
-      )
+      .filter((source) => source.edits.length > 0)
       .map((source) => ({ path: source.path, edits: source.edits })),
     preserved,
     skips,

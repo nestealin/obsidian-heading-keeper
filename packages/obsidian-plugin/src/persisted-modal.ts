@@ -24,6 +24,52 @@ function list(container: HTMLElement, items: readonly string[]): void {
   for (const item of items) element.createEl("li", { text: item });
 }
 
+const REASON_DESCRIPTIONS: Record<Locale, Readonly<Record<string, string>>> = {
+  en: {
+    "ambiguous-prefix": "Ambiguous numbering prefix",
+    "block-reference": "Block reference",
+    "duplicate-heading-rename": "Duplicate heading rename",
+    "external-link": "External link",
+    "heading-missing-top-level": "Missing top-level heading",
+    "heading-not-numbered": "Heading is not numbered",
+    "heading-outside-range": "Heading outside configured range",
+    "malformed-percent-encoding": "Malformed fragment encoding",
+    "missing-parent": "Missing parent heading",
+    "semantic-prefix": "Semantically similar numbering prefix",
+    "target-ambiguous": "Ambiguous target",
+    "target-external": "External target",
+    "target-missing": "Missing target",
+    "target-path-invalid": "Invalid target path",
+    "target-resolution-error": "Target resolution failed",
+  },
+  zh: {
+    "ambiguous-prefix": "编号前缀归属不明确",
+    "block-reference": "块引用",
+    "duplicate-heading-rename": "重复的标题重命名",
+    "external-link": "外部链接",
+    "heading-missing-top-level": "缺少起始层级标题",
+    "heading-not-numbered": "标题未编号",
+    "heading-outside-range": "标题超出配置层级",
+    "malformed-percent-encoding": "片段编码格式错误",
+    "missing-parent": "缺少父级标题",
+    "semantic-prefix": "语义相似的编号前缀",
+    "target-ambiguous": "目标不明确",
+    "target-external": "外部目标",
+    "target-missing": "目标不存在",
+    "target-path-invalid": "目标路径无效",
+    "target-resolution-error": "目标解析失败",
+  },
+};
+
+function reasonText(locale: Locale, code: string): string {
+  const label = locale === "zh" ? "原因" : "Reason";
+  const separator = locale === "zh" ? "：" : ": ";
+  const description = REASON_DESCRIPTIONS[locale][code];
+  return description
+    ? `${label}${separator}${description} [${code}]`
+    : `${label}${separator}${code}`;
+}
+
 export class PersistedPreviewModal extends Modal {
   private consumed = false;
 
@@ -71,7 +117,10 @@ export class PersistedPreviewModal extends Modal {
     heading(
       contentEl,
       translate(this.locale, "modal.preview.links"),
-      this.model.groups.linkSources.length,
+      this.model.groups.linkSources.reduce(
+        (count, source) => count + source.edits.length,
+        0,
+      ),
     );
     list(
       contentEl,
@@ -94,7 +143,9 @@ export class PersistedPreviewModal extends Modal {
     );
     list(
       contentEl,
-      this.model.groups.preserved.map((item) => `${item.path}: ${item.code}`),
+      this.model.groups.preserved.map(
+        (item) => `${item.path}: ${reasonText(this.locale, item.code)}`,
+      ),
     );
     heading(
       contentEl,
@@ -103,7 +154,9 @@ export class PersistedPreviewModal extends Modal {
     );
     list(
       contentEl,
-      this.model.groups.skips.map((item) => `${item.path}: ${item.code}`),
+      this.model.groups.skips.map(
+        (item) => `${item.path}: ${reasonText(this.locale, item.code)}`,
+      ),
     );
     heading(contentEl, translate(this.locale, "modal.preview.boundary"));
     list(
@@ -125,8 +178,8 @@ export class PersistedPreviewModal extends Modal {
       if (this.consumed) return;
       this.consumed = true;
       button.disabled = true;
-      this.close();
       this.confirm();
+      this.close();
     });
   }
 
