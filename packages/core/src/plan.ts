@@ -1,5 +1,7 @@
 import { scanHeadings } from "./scanner.js";
+import { classifyOwnership } from "./ownership.js";
 import type {
+  NumberingFormat,
   NumberingPlan,
   NumberingPlanEntry,
   SourceRange,
@@ -8,12 +10,18 @@ import type {
 
 export type StalePlanCode =
   | "out-of-bounds"
+  | "invalid-format"
+  | "invalid-segments"
+  | "invalid-skip"
+  | "prefix-mismatch"
+  | "ownership-mismatch"
   | "range-mismatch"
   | "overlapping-edit"
   | "unsafe-edit"
   | "missing-edit"
   | "missing-heading"
   | "heading-mismatch"
+  | "duplicate-target"
   | "stale-text";
 
 export class StalePlanError extends Error {
@@ -37,6 +45,35 @@ interface IndexedRange {
 
 interface ResolvedEdit extends IndexedRange {
   replacementText: string;
+}
+
+function isSingleLineString(value: unknown): value is string {
+  return (
+    typeof value === "string" && value.length > 0 && !/[\r\n]/u.test(value)
+  );
+}
+
+function validatedFormat(format: unknown): Readonly<NumberingFormat> {
+  try {
+    if (
+      typeof format === "object" &&
+      format !== null &&
+      isSingleLineString(
+        (format as { numberSeparator?: unknown }).numberSeparator,
+      ) &&
+      isSingleLineString(
+        (format as { titleSeparator?: unknown }).titleSeparator,
+      )
+    ) {
+      return format as NumberingFormat;
+    }
+  } catch {
+    // An untrusted format accessor is invalid.
+  }
+  throw new StalePlanError(
+    "invalid-format",
+    "Numbering plan format must contain non-empty single-line separators.",
+  );
 }
 
 function isRangeInBounds(range: SourceRange, length: number): boolean {
@@ -99,11 +136,81 @@ function validateEntryRanges(
   }
 }
 
+function validateEntryIntegrity(
+  entry: NumberingPlanEntry,
+  format: Readonly<NumberingFormat>,
+  entryIndex: number,
+): void {
+  if (
+    !Array.isArray(entry.segments) ||
+    entry.segments.some(
+      (segment) => !Number.isSafeInteger(segment) || segment < 0,
+    ) ||
+    (entry.action !== "skip" && entry.segments.length === 0)
+  ) {
+    throw new StalePlanError(
+      "invalid-segments",
+      `Plan entry ${entryIndex} contains invalid numbering segments.`,
+      entryIndex,
+    );
+  }
+
+  if (
+    entry.action === "skip" &&
+    (entry.segments.length !== 0 || entry.displayPrefix !== "")
+  ) {
+    throw new StalePlanError(
+      "invalid-skip",
+      `Plan entry ${entryIndex} skip action must have empty numbering data.`,
+      entryIndex,
+    );
+  }
+
+  const expectedPrefix = entry.segments.join(format.numberSeparator);
+  if (
+    typeof entry.displayPrefix !== "string" ||
+    entry.displayPrefix !== expectedPrefix
+  ) {
+    throw new StalePlanError(
+      "prefix-mismatch",
+      `Plan entry ${entryIndex} display prefix is not derived from its segments.`,
+      entryIndex,
+    );
+  }
+
+  const ownership = classifyOwnership(
+    entry.heading,
+    entry.displayPrefix,
+    format,
+  );
+  if (entry.ownership !== ownership) {
+    throw new StalePlanError(
+      "ownership-mismatch",
+      `Plan entry ${entryIndex} ownership does not match its original heading.`,
+      entryIndex,
+    );
+  }
+
+  if (
+    entry.action === "replace" ||
+    entry.action === "decorate" ||
+    (entry.action === "insert" && ownership !== "absent") ||
+    (entry.action === "preserve" && ownership === "absent")
+  ) {
+    throw new StalePlanError(
+      "unsafe-edit",
+      `Plan entry ${entryIndex} action is not valid for its verified ownership.`,
+      entryIndex,
+    );
+  }
+}
+
 function validateEditContract(
   entry: NumberingPlanEntry,
+  format: Readonly<NumberingFormat>,
   entryIndex: number,
 ): TextEdit | undefined {
-  const changesText = entry.action === "insert" || entry.action === "replace";
+  const changesText = entry.action === "insert";
   if (changesText && !entry.edit) {
     throw new StalePlanError(
       "missing-edit",
@@ -138,28 +245,11 @@ function validateEditContract(
       entryIndex,
     );
   }
-  if (entry.action === "insert") {
-    const expectedText = entry.edit.expectedText;
-    const replacementText = entry.edit.replacementText;
-    const insertedLength = replacementText.length - expectedText.length;
-    const insertedText = replacementText.slice(0, insertedLength);
-    if (
-      entry.ownership !== "absent" ||
-      insertedLength <= entry.displayPrefix.length ||
-      !replacementText.endsWith(expectedText) ||
-      !insertedText.startsWith(entry.displayPrefix)
-    ) {
-      throw new StalePlanError(
-        "unsafe-edit",
-        `Plan entry ${entryIndex} is not a conservative prefix insertion.`,
-        entryIndex,
-      );
-    }
-  }
-  if (entry.action === "replace" && entry.ownership !== "exact") {
+  const expectedReplacement = `${entry.displayPrefix}${format.titleSeparator}${entry.edit.expectedText}`;
+  if (entry.edit.replacementText !== expectedReplacement) {
     throw new StalePlanError(
       "unsafe-edit",
-      `Plan entry ${entryIndex} cannot replace an unowned numeric candidate.`,
+      `Plan entry ${entryIndex} is not an exact conservative prefix insertion.`,
       entryIndex,
     );
   }
@@ -167,15 +257,27 @@ function validateEditContract(
 }
 
 export function applyPlan(markdown: string, plan: NumberingPlan): string {
+  const format = validatedFormat(plan.format);
   const plannedEdits: IndexedRange[] = [];
+  const plannedTargets = new Set<string>();
 
   for (let index = 0; index < plan.entries.length; index += 1) {
     const entry = plan.entries[index];
     if (!entry) {
       continue;
     }
+    const target = `${entry.heading.line}:${entry.heading.level}`;
+    if (plannedTargets.has(target)) {
+      throw new StalePlanError(
+        "duplicate-target",
+        `Plan entry ${index} repeats heading target ${target}.`,
+        index,
+      );
+    }
+    plannedTargets.add(target);
     validateEntryRanges(entry, markdown.length, index);
-    const edit = validateEditContract(entry, index);
+    validateEntryIntegrity(entry, format, index);
+    const edit = validateEditContract(entry, format, index);
     if (edit) {
       plannedEdits.push({ range: edit.range, entryIndex: index });
     }
@@ -189,7 +291,7 @@ export function applyPlan(markdown: string, plan: NumberingPlan): string {
 
   for (let index = 0; index < plan.entries.length; index += 1) {
     const entry = plan.entries[index];
-    if (!entry || !entry.edit) {
+    if (!entry) {
       continue;
     }
 
@@ -207,6 +309,16 @@ export function applyPlan(markdown: string, plan: NumberingPlan): string {
         `Plan entry ${index} heading level changed.`,
         index,
       );
+    }
+    if (!entry.edit) {
+      if (current.rawText !== entry.heading.rawText) {
+        throw new StalePlanError(
+          "stale-text",
+          `Plan entry ${index} heading text changed.`,
+          index,
+        );
+      }
+      continue;
     }
     if (current.rawText === entry.edit.replacementText) {
       continue;

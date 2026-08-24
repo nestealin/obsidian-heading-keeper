@@ -19,7 +19,51 @@ describe("classifyOwnership", () => {
   });
 
   it("recognizes an exact prefix followed by a custom title separator", () => {
-    expect(classifyOwnership(heading("1-2 — Managed"), "1-2")).toBe("exact");
+    expect(
+      classifyOwnership(heading("1-2 — Managed"), "1-2", {
+        numberSeparator: "-",
+        titleSeparator: " — ",
+      }),
+    ).toBe("exact");
+  });
+
+  it("uses the actual title separator for exact ownership", () => {
+    const format = { numberSeparator: ".", titleSeparator: ":" };
+
+    expect(classifyOwnership(heading("1.2:Managed"), "1.2", format)).toBe(
+      "exact",
+    );
+    expect(classifyOwnership(heading("1.2. Managed"), "1.2", format)).not.toBe(
+      "exact",
+    );
+  });
+
+  it("uses the actual number separator to identify a different candidate", () => {
+    const format = { numberSeparator: "-", titleSeparator: ":" };
+
+    expect(classifyOwnership(heading("1-2:Managed"), "1-2", format)).toBe(
+      "exact",
+    );
+    expect(classifyOwnership(heading("9-8:Managed"), "1-2", format)).toBe(
+      "ambiguous",
+    );
+  });
+
+  it.each(["999.1.1.1", "1.2.3.4.5"])(
+    "never treats the standard numeric chain %s as absent",
+    (numericChain) => {
+      expect(
+        classifyOwnership(heading(`${numericChain} candidate`), "1"),
+      ).not.toBe("absent");
+    },
+  );
+
+  it("keeps strong semantic protection ahead of formatted exact matching", () => {
+    const format = { numberSeparator: "-", titleSeparator: ":" };
+
+    expect(
+      classifyOwnership(heading("2024-08-25:release"), "2024-08-25", format),
+    ).toBe("semantic");
   });
 
   it("returns absent when the title does not start with a numeric candidate", () => {

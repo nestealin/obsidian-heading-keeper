@@ -4,6 +4,7 @@ import {
   applyPlan,
   buildNumberingPlan,
   DEFAULT_SETTINGS,
+  NumberingOverflowError,
   scanHeadings,
 } from "../src/index.js";
 import type {
@@ -21,7 +22,10 @@ const settings = fc.integer({ min: 1, max: 6 }).chain((topLevel) =>
   fc
     .record({
       bottomLevel: fc.integer({ min: topLevel, max: 6 }),
-      startAt: fc.integer({ min: 0, max: 8 }),
+      startAt: fc.oneof(
+        fc.integer({ min: 0, max: 8 }),
+        fc.constant(Number.MAX_SAFE_INTEGER - 100),
+      ),
       gapStrategy: fc.constantFrom<GapStrategy>(
         "zero-fill",
         "one-fill",
@@ -47,6 +51,38 @@ function markdownFor(levels: readonly HeadingLevel[]): string {
 }
 
 describe("numbering properties", () => {
+  it("advances safely or throws at the safe integer boundary", () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom(Number.MAX_SAFE_INTEGER - 1, Number.MAX_SAFE_INTEGER),
+        fc.integer({ min: 1, max: 3 }),
+        (startAt, headingCount) => {
+          const markdown = `${Array.from(
+            { length: headingCount },
+            (_, index) => `## Heading-${index}`,
+          ).join("\n")}\n`;
+          const build = () =>
+            buildNumberingPlan(scanHeadings(markdown), {
+              ...DEFAULT_SETTINGS,
+              startAt,
+            });
+          const safeHeadingCount = Number.MAX_SAFE_INTEGER - startAt + 1;
+
+          if (headingCount <= safeHeadingCount) {
+            expect(build().entries.map((entry) => entry.displayPrefix)).toEqual(
+              Array.from({ length: headingCount }, (_, index) =>
+                String(startAt + index),
+              ),
+            );
+          } else {
+            expect(build).toThrowError(NumberingOverflowError);
+          }
+        },
+      ),
+      { numRuns: 1000 },
+    );
+  });
+
   it("builds a completely deterministic plan", () => {
     fc.assert(
       fc.property(headingLevels, settings, (levels, numberingSettings) => {

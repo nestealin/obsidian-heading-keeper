@@ -3,6 +3,7 @@ import {
   applyPlan,
   buildNumberingPlan,
   DEFAULT_SETTINGS,
+  NumberingOverflowError,
   scanHeadings,
   StalePlanError,
 } from "../src/index.js";
@@ -128,6 +129,31 @@ describe("buildNumberingPlan", () => {
     expect(plan.diagnostics).toEqual([]);
   });
 
+  it("rejects an unsafe initial counter before building a prefix", () => {
+    expect(() =>
+      buildNumberingPlan(scanHeadings("## Root\n"), {
+        ...DEFAULT_SETTINGS,
+        startAt: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    ).toThrowError(NumberingOverflowError);
+  });
+
+  it("throws a stable overflow error when a counter cannot advance", () => {
+    try {
+      buildNumberingPlan(scanHeadings("## First\n## Second\n"), {
+        ...DEFAULT_SETTINGS,
+        startAt: Number.MAX_SAFE_INTEGER,
+      });
+      throw new Error("Expected numbering to reject counter overflow.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(NumberingOverflowError);
+      expect(error).toMatchObject({
+        code: "counter-overflow",
+        level: 2,
+      });
+    }
+  });
+
   it("uses ownership to choose only conservative plan actions", () => {
     const plan = buildNumberingPlan(
       scanHeadings(
@@ -153,6 +179,35 @@ describe("buildNumberingPlan", () => {
       { displayPrefix: "3", ownership: "semantic", action: "preserve" },
       { displayPrefix: "4", ownership: "ambiguous", action: "preserve" },
     ]);
+  });
+
+  it("captures and uses custom numbering format for ownership", () => {
+    const format = { numberSeparator: "-", titleSeparator: ":" };
+    const plan = buildNumberingPlan(
+      scanHeadings("## 1:Root\n### 1-1:Child\n### 9-9:Old\n"),
+      { ...DEFAULT_SETTINGS, ...format },
+    );
+
+    expect(plan.format).toEqual(format);
+    expect(
+      plan.entries.map(({ ownership, action }) => ({ ownership, action })),
+    ).toEqual([
+      { ownership: "exact", action: "preserve" },
+      { ownership: "exact", action: "preserve" },
+      { ownership: "ambiguous", action: "preserve" },
+    ]);
+  });
+
+  it("classifies ownership even when the heading action is skip", () => {
+    const markdown = "# 2024. Roadmap\n";
+    const plan = buildNumberingPlan(scanHeadings(markdown), DEFAULT_SETTINGS);
+
+    expect(plan.entries[0]).toMatchObject({
+      displayPrefix: "",
+      ownership: "semantic",
+      action: "skip",
+    });
+    expect(applyPlan(markdown, plan)).toBe(markdown);
   });
 });
 
@@ -217,6 +272,136 @@ describe("applyPlan", () => {
     const plan = buildNumberingPlan(scanHeadings(markdown), DEFAULT_SETTINGS);
 
     expectStaleCode(() => applyPlan("## Changed\n", plan), "stale-text");
+  });
+
+  it.each([
+    ["preserve", "## 1. Existing\n", "## 1. Changed\n"],
+    ["skip", "# Boundary\n", "# Changed\n"],
+  ] as const)("validates stale text for a %s entry", (_, original, current) => {
+    const plan = buildNumberingPlan(scanHeadings(original), DEFAULT_SETTINGS);
+
+    expectStaleCode(() => applyPlan(current, plan), "stale-text");
+  });
+
+  it("rejects the whole plan before applying an insert when a preserve entry is stale", () => {
+    const markdown = "## First\n## 2. Existing\n";
+    const plan = buildNumberingPlan(scanHeadings(markdown), DEFAULT_SETTINGS);
+    const stale = "## First\n## 2. Changed\n";
+
+    expectStaleCode(() => applyPlan(stale, plan), "stale-text");
+    expect(stale).toBe("## First\n## 2. Changed\n");
+  });
+
+  it("rejects duplicate line and level targets", () => {
+    const markdown = "## First\n## Second\n";
+    const plan = buildNumberingPlan(scanHeadings(markdown), DEFAULT_SETTINGS);
+    const first = plan.entries[0];
+    const second = plan.entries[1];
+    if (!first || !second) {
+      throw new Error("Expected two plan entries.");
+    }
+    second.heading.line = first.heading.line;
+
+    expectStaleCode(() => applyPlan(markdown, plan), "duplicate-target");
+  });
+
+  it.each([
+    [{ numberSeparator: "", titleSeparator: ". " }],
+    [{ numberSeparator: ".\n", titleSeparator: ". " }],
+    [{ numberSeparator: ".", titleSeparator: "" }],
+    [{ numberSeparator: ".", titleSeparator: ".\r" }],
+  ] as const)("rejects an invalid plan format snapshot", (format) => {
+    const markdown = "## Overview\n";
+    const plan = buildNumberingPlan(scanHeadings(markdown), DEFAULT_SETTINGS);
+
+    expectStaleCode(
+      () => applyPlan(markdown, { ...plan, format }),
+      "invalid-format",
+    );
+  });
+
+  it.each([[-1], [1.5], [Number.MAX_SAFE_INTEGER + 1]])(
+    "rejects unsafe numbering segments %j",
+    (segments) => {
+      const markdown = "## Overview\n";
+      const plan = buildNumberingPlan(scanHeadings(markdown), DEFAULT_SETTINGS);
+      const entry = plan.entries[0];
+      if (!entry) {
+        throw new Error("Expected a plan entry.");
+      }
+      entry.segments = segments;
+
+      expectStaleCode(() => applyPlan(markdown, plan), "invalid-segments");
+    },
+  );
+
+  it("rejects a display prefix not derived from segments and format", () => {
+    const markdown = "## Overview\n";
+    const plan = buildNumberingPlan(scanHeadings(markdown), DEFAULT_SETTINGS);
+    const entry = plan.entries[0];
+    if (!entry?.edit) {
+      throw new Error("Expected an editable plan entry.");
+    }
+    entry.displayPrefix = "999";
+    entry.edit.replacementText = "999. Overview";
+
+    expectStaleCode(() => applyPlan(markdown, plan), "prefix-mismatch");
+  });
+
+  it("rejects non-empty numbering data on a skip entry", () => {
+    const markdown = "# Boundary\n";
+    const plan = buildNumberingPlan(scanHeadings(markdown), DEFAULT_SETTINGS);
+    const entry = plan.entries[0];
+    if (!entry) {
+      throw new Error("Expected a plan entry.");
+    }
+    entry.segments = [1];
+    entry.displayPrefix = "1";
+
+    expectStaleCode(() => applyPlan(markdown, plan), "invalid-skip");
+  });
+
+  it("rejects forged semantic ownership for an absent title", () => {
+    const markdown = "## Overview\n";
+    const plan = buildNumberingPlan(scanHeadings(markdown), DEFAULT_SETTINGS);
+    const entry = plan.entries[0];
+    if (!entry) {
+      throw new Error("Expected a plan entry.");
+    }
+    entry.ownership = "semantic";
+    entry.action = "preserve";
+    delete entry.edit;
+
+    expectStaleCode(() => applyPlan(markdown, plan), "ownership-mismatch");
+  });
+
+  it("rejects every replace action even when ownership claims exact", () => {
+    const markdown = "## 1. Existing\n";
+    const plan = buildNumberingPlan(scanHeadings(markdown), DEFAULT_SETTINGS);
+    const entry = plan.entries[0];
+    if (!entry) {
+      throw new Error("Expected a plan entry.");
+    }
+    entry.action = "replace";
+    entry.edit = {
+      range: entry.heading.contentRange,
+      expectedText: entry.heading.rawText,
+      replacementText: "1. Forged",
+    };
+
+    expectStaleCode(() => applyPlan(markdown, plan), "unsafe-edit");
+  });
+
+  it("requires the insert replacement to match the complete format exactly", () => {
+    const markdown = "## Overview\n";
+    const plan = buildNumberingPlan(scanHeadings(markdown), DEFAULT_SETTINGS);
+    const edit = plan.entries[0]?.edit;
+    if (!edit) {
+      throw new Error("Expected an editable plan entry.");
+    }
+    edit.replacementText = "1 Overview";
+
+    expectStaleCode(() => applyPlan(markdown, plan), "unsafe-edit");
   });
 
   it.each([

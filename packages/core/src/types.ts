@@ -53,6 +53,11 @@ export interface TextEdit {
   replacementText: string;
 }
 
+export interface NumberingFormat {
+  readonly numberSeparator: string;
+  readonly titleSeparator: string;
+}
+
 export interface NumberingPlanEntry {
   heading: HeadingNode;
   segments: number[];
@@ -71,6 +76,7 @@ export interface PlanDiagnostic {
 }
 
 export interface NumberingPlan {
+  readonly format: NumberingFormat;
   entries: NumberingPlanEntry[];
   diagnostics: PlanDiagnostic[];
 }

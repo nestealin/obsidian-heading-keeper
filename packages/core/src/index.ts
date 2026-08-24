@@ -5,7 +5,7 @@ export const packageIdentity = Object.freeze({
 
 export { DEFAULT_SETTINGS, validateSettings } from "./settings.js";
 export { scanHeadings } from "./scanner.js";
-export { buildNumberingPlan } from "./numbering.js";
+export { buildNumberingPlan, NumberingOverflowError } from "./numbering.js";
 export { classifyOwnership } from "./ownership.js";
 export { applyPlan, StalePlanError } from "./plan.js";
 export type { StalePlanCode } from "./plan.js";
@@ -16,6 +16,7 @@ export type {
   HeadingNode,
   NumberingPlan,
   NumberingPlanEntry,
+  NumberingFormat,
   NumberingSettings,
   Ownership,
   PlanDiagnostic,

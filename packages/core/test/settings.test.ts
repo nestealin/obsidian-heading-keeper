@@ -148,6 +148,13 @@ describe("validateSettings", () => {
     expectInvalid({ ...validSettings, startAt: "1" }, "startAt");
   });
 
+  it("rejects a startAt value outside the safe integer range", () => {
+    expectInvalid(
+      { ...validSettings, startAt: Number.MAX_SAFE_INTEGER + 1 },
+      "startAt",
+    );
+  });
+
   it("rejects empty, non-string, and multiline number separators", () => {
     expectInvalid({ ...validSettings, numberSeparator: "" }, "numberSeparator");
     expectInvalid({ ...validSettings, numberSeparator: 1 }, "numberSeparator");
