@@ -10,13 +10,14 @@
   "scripts": {
     "build": "corepack pnpm -r build",
     "format:check": "prettier --check .",
-    "typecheck": "corepack pnpm -r typecheck",
+    "typecheck": "corepack pnpm -r typecheck && tsc -p scripts/tsconfig.json",
     "test": "corepack pnpm -r build && vitest --config vitest.workspace.ts run",
     "scan:sensitive": "node scripts/scan-sensitive.mjs",
     "scan:rejected": "node scripts/scan-rejected.mjs",
     "verify:local": "corepack pnpm format:check && corepack pnpm typecheck && corepack pnpm test && corepack pnpm build && corepack pnpm scan:sensitive && git diff --check"
   },
   "devDependencies": {
+    "@types/node": "22.15.3",
     "prettier": "3.6.2",
     "typescript": "5.9.2",
     "vitest": "4.0.16"
