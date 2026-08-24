@@ -1,11 +1,30 @@
 import { describe, expect, it } from "vitest";
 import {
+  LINK_DIAGNOSTIC_CODES,
   normalizeHeadingFragment,
   planHeadingLinkChanges,
   scanHeadingLinks,
+  type LinkDiagnosticCode,
 } from "../src/index.js";
 
 describe("planHeadingLinkChanges", () => {
+  it("exports the exact current diagnostic code contract", () => {
+    const expected = [
+      "missing-heading-fragment",
+      "external-link",
+      "malformed-percent-encoding",
+      "block-reference",
+      "target-resolution-error",
+      "target-missing",
+      "target-ambiguous",
+      "target-external",
+      "target-path-invalid",
+      "duplicate-heading-rename",
+    ] satisfies readonly LinkDiagnosticCode[];
+
+    expect(LINK_DIAGNOSTIC_CODES).toEqual(expected);
+  });
+
   it("rewrites only a unique resolved heading identity", () => {
     const changes = planHeadingLinkChanges({
       sourcePath: "Refs.md",

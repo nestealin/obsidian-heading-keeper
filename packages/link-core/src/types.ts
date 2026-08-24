@@ -35,8 +35,23 @@ export interface LinkEdit {
   reason: "unique-heading-rename";
 }
 
+export const LINK_DIAGNOSTIC_CODES = [
+  "missing-heading-fragment",
+  "external-link",
+  "malformed-percent-encoding",
+  "block-reference",
+  "target-resolution-error",
+  "target-missing",
+  "target-ambiguous",
+  "target-external",
+  "target-path-invalid",
+  "duplicate-heading-rename",
+] as const;
+
+export type LinkDiagnosticCode = (typeof LINK_DIAGNOSTIC_CODES)[number];
+
 export interface LinkDiagnostic {
-  code: string;
+  code: LinkDiagnosticCode;
   message: string;
   sourceRange: SourceRange;
 }

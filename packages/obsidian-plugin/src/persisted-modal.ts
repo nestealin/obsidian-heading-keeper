@@ -2,6 +2,7 @@ import { Modal, type App } from "obsidian";
 import type { RecoveryFileInspection } from "./persistence/types.js";
 import type {
   PreviewGroups,
+  PreviewReasonCode,
   WorkflowPreviewKind,
 } from "./persisted-workflow.js";
 import { translate, type Locale, type TranslationKey } from "./i18n.js";
@@ -24,49 +25,37 @@ function list(container: HTMLElement, items: readonly string[]): void {
   for (const item of items) element.createEl("li", { text: item });
 }
 
-const REASON_DESCRIPTIONS: Record<Locale, Readonly<Record<string, string>>> = {
-  en: {
-    "ambiguous-prefix": "Ambiguous numbering prefix",
-    "block-reference": "Block reference",
-    "duplicate-heading-rename": "Duplicate heading rename",
-    "external-link": "External link",
-    "heading-missing-top-level": "Missing top-level heading",
-    "heading-not-numbered": "Heading is not numbered",
-    "heading-outside-range": "Heading outside configured range",
-    "malformed-percent-encoding": "Malformed fragment encoding",
-    "missing-parent": "Missing parent heading",
-    "semantic-prefix": "Semantically similar numbering prefix",
-    "target-ambiguous": "Ambiguous target",
-    "target-external": "External target",
-    "target-missing": "Missing target",
-    "target-path-invalid": "Invalid target path",
-    "target-resolution-error": "Target resolution failed",
-  },
-  zh: {
-    "ambiguous-prefix": "编号前缀归属不明确",
-    "block-reference": "块引用",
-    "duplicate-heading-rename": "重复的标题重命名",
-    "external-link": "外部链接",
-    "heading-missing-top-level": "缺少起始层级标题",
-    "heading-not-numbered": "标题未编号",
-    "heading-outside-range": "标题超出配置层级",
-    "malformed-percent-encoding": "片段编码格式错误",
-    "missing-parent": "缺少父级标题",
-    "semantic-prefix": "语义相似的编号前缀",
-    "target-ambiguous": "目标不明确",
-    "target-external": "外部目标",
-    "target-missing": "目标不存在",
-    "target-path-invalid": "目标路径无效",
-    "target-resolution-error": "目标解析失败",
-  },
-};
+const REASON_TRANSLATION_KEYS = {
+  "missing-heading-fragment": "modal.preview.reason.missing-heading-fragment",
+  "external-link": "modal.preview.reason.external-link",
+  "malformed-percent-encoding":
+    "modal.preview.reason.malformed-percent-encoding",
+  "block-reference": "modal.preview.reason.block-reference",
+  "target-resolution-error": "modal.preview.reason.target-resolution-error",
+  "target-missing": "modal.preview.reason.target-missing",
+  "target-ambiguous": "modal.preview.reason.target-ambiguous",
+  "target-external": "modal.preview.reason.target-external",
+  "target-path-invalid": "modal.preview.reason.target-path-invalid",
+  "duplicate-heading-rename": "modal.preview.reason.duplicate-heading-rename",
+  "ambiguous-prefix": "modal.preview.reason.ambiguous-prefix",
+  "semantic-prefix": "modal.preview.reason.semantic-prefix",
+  "missing-parent": "modal.preview.reason.missing-parent",
+  "heading-outside-range": "modal.preview.reason.heading-outside-range",
+  "heading-missing-top-level": "modal.preview.reason.heading-missing-top-level",
+  "heading-not-numbered": "modal.preview.reason.heading-not-numbered",
+} satisfies Record<PreviewReasonCode, TranslationKey>;
 
 function reasonText(locale: Locale, code: string): string {
   const label = locale === "zh" ? "原因" : "Reason";
   const separator = locale === "zh" ? "：" : ": ";
-  const description = REASON_DESCRIPTIONS[locale][code];
-  return description
-    ? `${label}${separator}${description} [${code}]`
+  const key = Object.prototype.hasOwnProperty.call(
+    REASON_TRANSLATION_KEYS,
+    code,
+  )
+    ? REASON_TRANSLATION_KEYS[code as PreviewReasonCode]
+    : undefined;
+  return key
+    ? `${label}${separator}${translate(locale, key)} [${code}]`
     : `${label}${separator}${code}`;
 }
 

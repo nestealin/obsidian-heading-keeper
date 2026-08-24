@@ -56,6 +56,22 @@ export type TranslationKey =
   | "modal.preview.action.add"
   | "modal.preview.action.remove"
   | "modal.preview.empty"
+  | "modal.preview.reason.missing-heading-fragment"
+  | "modal.preview.reason.external-link"
+  | "modal.preview.reason.malformed-percent-encoding"
+  | "modal.preview.reason.block-reference"
+  | "modal.preview.reason.target-resolution-error"
+  | "modal.preview.reason.target-missing"
+  | "modal.preview.reason.target-ambiguous"
+  | "modal.preview.reason.target-external"
+  | "modal.preview.reason.target-path-invalid"
+  | "modal.preview.reason.duplicate-heading-rename"
+  | "modal.preview.reason.ambiguous-prefix"
+  | "modal.preview.reason.semantic-prefix"
+  | "modal.preview.reason.missing-parent"
+  | "modal.preview.reason.heading-outside-range"
+  | "modal.preview.reason.heading-missing-top-level"
+  | "modal.preview.reason.heading-not-numbered"
   | "modal.preview.boundary.sourceHashPreflight"
   | "modal.preview.boundary.externalChangePreserved"
   | "modal.recovery.aria"
@@ -141,6 +157,27 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     "modal.preview.action.add": "Add persisted numbering",
     "modal.preview.action.remove": "Remove persisted numbering",
     "modal.preview.empty": "(empty)",
+    "modal.preview.reason.missing-heading-fragment":
+      "Link has no heading fragment",
+    "modal.preview.reason.external-link": "External link",
+    "modal.preview.reason.malformed-percent-encoding":
+      "Malformed fragment encoding",
+    "modal.preview.reason.block-reference": "Block reference",
+    "modal.preview.reason.target-resolution-error": "Target resolution failed",
+    "modal.preview.reason.target-missing": "Missing target",
+    "modal.preview.reason.target-ambiguous": "Ambiguous target",
+    "modal.preview.reason.target-external": "External target",
+    "modal.preview.reason.target-path-invalid": "Invalid target path",
+    "modal.preview.reason.duplicate-heading-rename": "Duplicate heading rename",
+    "modal.preview.reason.ambiguous-prefix": "Ambiguous numbering prefix",
+    "modal.preview.reason.semantic-prefix":
+      "Semantically similar numbering prefix",
+    "modal.preview.reason.missing-parent": "Missing parent heading",
+    "modal.preview.reason.heading-outside-range":
+      "Heading outside configured range",
+    "modal.preview.reason.heading-missing-top-level":
+      "Missing top-level heading",
+    "modal.preview.reason.heading-not-numbered": "Heading is not numbered",
     "modal.preview.boundary.sourceHashPreflight":
       "All source hashes are checked before the first write.",
     "modal.preview.boundary.externalChangePreserved":
@@ -221,6 +258,22 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     "modal.preview.action.add": "写入标题编号",
     "modal.preview.action.remove": "移除写入编号",
     "modal.preview.empty": "（空）",
+    "modal.preview.reason.missing-heading-fragment": "链接没有标题片段",
+    "modal.preview.reason.external-link": "外部链接",
+    "modal.preview.reason.malformed-percent-encoding": "片段编码格式错误",
+    "modal.preview.reason.block-reference": "块引用",
+    "modal.preview.reason.target-resolution-error": "目标解析失败",
+    "modal.preview.reason.target-missing": "目标不存在",
+    "modal.preview.reason.target-ambiguous": "目标不明确",
+    "modal.preview.reason.target-external": "外部目标",
+    "modal.preview.reason.target-path-invalid": "目标路径无效",
+    "modal.preview.reason.duplicate-heading-rename": "重复的标题重命名",
+    "modal.preview.reason.ambiguous-prefix": "编号前缀归属不明确",
+    "modal.preview.reason.semantic-prefix": "语义相似的编号前缀",
+    "modal.preview.reason.missing-parent": "缺少父级标题",
+    "modal.preview.reason.heading-outside-range": "标题超出配置层级",
+    "modal.preview.reason.heading-missing-top-level": "缺少起始层级标题",
+    "modal.preview.reason.heading-not-numbered": "标题未编号",
     "modal.preview.boundary.sourceHashPreflight":
       "首次写入前会校验所有来源哈希。",
     "modal.preview.boundary.externalChangePreserved":

@@ -19,6 +19,7 @@ const state = vi.hoisted(() => ({
   reads: 0,
   savedData: [] as unknown[],
   saveQueue: [] as Promise<void>[],
+  saveOutcomes: [] as Array<"ok" | "fail">,
   saveError: false,
   settingAvailable: true,
   settingOpens: 0,
@@ -96,7 +97,9 @@ vi.mock("obsidian", () => {
     async saveData(value: unknown) {
       const queued = state.saveQueue.shift();
       if (queued) await queued;
-      if (state.saveError) throw new Error("storage");
+      if (state.saveError || state.saveOutcomes.shift() === "fail") {
+        throw new Error("storage");
+      }
       state.savedData.push(value);
     }
   }
@@ -210,6 +213,7 @@ beforeEach(() => {
   state.reads = 0;
   state.savedData.length = 0;
   state.saveQueue.length = 0;
+  state.saveOutcomes.length = 0;
   state.saveError = false;
   state.settingAvailable = true;
   state.settingOpens = 0;
@@ -378,12 +382,10 @@ describe("persisted plugin workflow", () => {
     await plugin.previewPersisted("add");
     const readsBeforeSaves = state.reads;
 
-    const firstSave = plugin.saveSettings({
-      ...plugin.settings,
+    const firstSave = plugin.saveSettingsPatch({
       titleSeparator: " · ",
     });
-    const secondSave = plugin.saveSettings({
-      ...plugin.settings,
+    const secondSave = plugin.saveSettingsPatch({
       numberSeparator: "-",
     });
 
@@ -404,8 +406,67 @@ describe("persisted plugin workflow", () => {
 
     secondGate.resolve(undefined);
     await secondSave;
+    expect(plugin.settings).toMatchObject({
+      titleSeparator: " · ",
+      numberSeparator: "-",
+    });
     await plugin.previewPersisted("add");
     expect(state.reads).toBeGreaterThan(readsBeforeSaves);
+  });
+
+  it("keeps the first committed patch when the second patch save fails", async () => {
+    state.saveOutcomes.push("ok", "fail");
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+
+    const results = await Promise.all([
+      plugin.saveSettingsPatch({ titleSeparator: " · " }),
+      plugin.saveSettingsPatch({ numberSeparator: "-" }),
+    ]);
+
+    expect(results).toEqual([true, false]);
+    expect(plugin.settings).toMatchObject({
+      titleSeparator: " · ",
+      numberSeparator: ".",
+    });
+  });
+
+  it("bases a second successful patch on the old commit after the first fails", async () => {
+    state.saveOutcomes.push("fail", "ok");
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+
+    const results = await Promise.all([
+      plugin.saveSettingsPatch({ titleSeparator: " · " }),
+      plugin.saveSettingsPatch({ numberSeparator: "-" }),
+    ]);
+
+    expect(results).toEqual([false, true]);
+    expect(plugin.settings).toMatchObject({
+      titleSeparator: ". ",
+      numberSeparator: "-",
+    });
+  });
+
+  it("keeps last-request replacement semantics for the public full save", async () => {
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+
+    const results = await Promise.all([
+      plugin.saveSettingsPatch({ titleSeparator: " · " }),
+      plugin.saveSettings({
+        ...DEFAULT_STORED_SETTINGS,
+        mode: "persisted",
+        numberSeparator: "-",
+      }),
+    ]);
+
+    expect(results).toEqual([true, true]);
+    expect(plugin.settings).toEqual({
+      ...DEFAULT_STORED_SETTINGS,
+      mode: "persisted",
+      numberSeparator: "-",
+    });
   });
 
   it("keeps a stale source at zero writes through executor preflight", async () => {

@@ -74,6 +74,13 @@ interface ReadingRequest {
   request: number;
 }
 
+type SettingsSaveRequest =
+  | { readonly kind: "full"; readonly value: unknown }
+  | {
+      readonly kind: "patch";
+      readonly value: Readonly<Partial<StoredSettings>>;
+    };
+
 class ReadingRenderChild extends MarkdownRenderChild {
   constructor(
     root: HTMLElement,
@@ -119,14 +126,18 @@ export class HeadingNumberingSettingTab extends PluginSettingTab {
       "settings.topLevel",
       "settings.topLevelDescription",
       this.headingNumbering.settings.topLevel,
-      (topLevel) => ({ topLevel }),
+      (topLevel) => ({
+        topLevel: topLevel as StoredSettings["topLevel"],
+      }),
     );
     this.addNumberField(
       locale,
       "settings.bottomLevel",
       "settings.bottomLevelDescription",
       this.headingNumbering.settings.bottomLevel,
-      (bottomLevel) => ({ bottomLevel }),
+      (bottomLevel) => ({
+        bottomLevel: bottomLevel as StoredSettings["bottomLevel"],
+      }),
     );
     this.addNumberField(
       locale,
@@ -211,7 +222,7 @@ export class HeadingNumberingSettingTab extends PluginSettingTab {
       | "settings.bottomLevelDescription"
       | "settings.startAtDescription",
     value: number,
-    update: (value: number) => Record<string, unknown>,
+    update: (value: number) => Partial<StoredSettings>,
   ): void {
     new Setting(this.containerEl)
       .setName(translate(locale, name))
@@ -230,7 +241,7 @@ export class HeadingNumberingSettingTab extends PluginSettingTab {
       | "settings.numberSeparatorDescription"
       | "settings.titleSeparatorDescription",
     value: string,
-    update: (value: string) => Record<string, unknown>,
+    update: (value: string) => Partial<StoredSettings>,
   ): void {
     new Setting(this.containerEl)
       .setName(translate(locale, name))
@@ -242,11 +253,8 @@ export class HeadingNumberingSettingTab extends PluginSettingTab {
       });
   }
 
-  private async save(update: Record<string, unknown>): Promise<void> {
-    await this.headingNumbering.saveSettings({
-      ...this.headingNumbering.settings,
-      ...update,
-    });
+  private async save(update: Partial<StoredSettings>): Promise<void> {
+    await this.headingNumbering.saveSettingsPatch(update);
     this.display();
   }
 }
@@ -260,6 +268,7 @@ export class HeadingNumberingPlugin extends Plugin {
   private previewGeneration = 0;
   private previewWasInvalidated = false;
   private settingsSaveInFlight = 0;
+  private settingsSaveQueue: Promise<void> = Promise.resolve();
   private dataStore: PluginDataStore | null = null;
   private vaultAdapter: ObsidianVaultFileAdapter | null = null;
   private currentPreview: Extract<
@@ -396,14 +405,43 @@ export class HeadingNumberingPlugin extends Plugin {
     this.settingsErrors = [...loaded.settingsErrors];
   }
 
-  async saveSettings(next: unknown): Promise<boolean> {
-    const validation = validateStoredSettings(next);
+  saveSettings(next: unknown): Promise<boolean> {
+    return this.enqueueSettingsSave({ kind: "full", value: next });
+  }
+
+  saveSettingsPatch(
+    patch: Readonly<Partial<StoredSettings>>,
+  ): Promise<boolean> {
+    return this.enqueueSettingsSave({ kind: "patch", value: patch });
+  }
+
+  private enqueueSettingsSave(request: SettingsSaveRequest): Promise<boolean> {
+    this.settingsSaveInFlight += 1;
+    this.invalidatePersistedPreview();
+    const result = this.settingsSaveQueue.then(() =>
+      this.performSettingsSave(request),
+    );
+    this.settingsSaveQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result.finally(() => {
+      this.settingsSaveInFlight -= 1;
+    });
+  }
+
+  private async performSettingsSave(
+    request: SettingsSaveRequest,
+  ): Promise<boolean> {
+    const candidate =
+      request.kind === "patch"
+        ? { ...this.settings, ...request.value }
+        : request.value;
+    const validation = validateStoredSettings(candidate);
     if (!validation.ok) {
       this.settingsErrors = validation.errors;
       return false;
     }
-    this.settingsSaveInFlight += 1;
-    this.invalidatePersistedPreview();
     try {
       if (!this.dataStore) {
         this.dataStore = new PluginDataStore(
@@ -425,8 +463,6 @@ export class HeadingNumberingPlugin extends Plugin {
     } catch {
       this.showNotice("notices.storageError");
       return false;
-    } finally {
-      this.settingsSaveInFlight -= 1;
     }
   }
 

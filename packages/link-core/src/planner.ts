@@ -3,6 +3,7 @@ import { scanHeadingLinks } from "./tokenizer.js";
 import type {
   HeadingRename,
   LinkDiagnostic,
+  LinkDiagnosticCode,
   LinkEdit,
   LinkPlan,
   LinkToken,
@@ -43,7 +44,7 @@ function identity(rename: HeadingRename): string | null {
 
 function diagnostic(
   token: LinkToken,
-  code: string,
+  code: LinkDiagnosticCode,
   message: string,
 ): LinkDiagnostic {
   return { code, message, sourceRange: token.range };

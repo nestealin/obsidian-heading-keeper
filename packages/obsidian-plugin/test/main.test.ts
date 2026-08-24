@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
   vaultReads: 0,
   readingMarkdown: new Map<string, string>(),
   savedData: [] as unknown[],
+  settingChanges: [] as Array<(value: string) => void | Promise<void>>,
   settingRows: [] as Array<{
     controls: string[];
     description: string;
@@ -175,7 +176,8 @@ vi.mock("obsidian", () => {
       return this;
     }
 
-    onChange() {
+    onChange(callback: (value: string) => void | Promise<void>) {
+      state.settingChanges.push(callback);
       return this;
     }
 
@@ -185,7 +187,8 @@ vi.mock("obsidian", () => {
   }
 
   class TextComponent {
-    onChange() {
+    onChange(callback: (value: string) => void | Promise<void>) {
+      state.settingChanges.push(callback);
       return this;
     }
 
@@ -236,6 +239,7 @@ beforeEach(() => {
   state.vaultReads = 0;
   state.readingMarkdown.clear();
   state.savedData.length = 0;
+  state.settingChanges.length = 0;
   state.settingRows.length = 0;
   state.settingTabs.length = 0;
   state.vaultWrites = 0;
@@ -371,6 +375,23 @@ describe("HeadingNumberingPlugin", () => {
     ]);
     expect(state.settingRows.every((row) => row.description.length > 0)).toBe(
       true,
+    );
+  });
+
+  it("merges two rapid SettingTab control changes against committed settings", async () => {
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    const tab = state.settingTabs[0] as { display: () => void };
+    tab.display();
+    const modeChange = state.settingChanges[0];
+    const topLevelChange = state.settingChanges[1];
+
+    await Promise.all([modeChange?.("persisted"), topLevelChange?.("3")]);
+
+    expect(plugin.settings.mode).toBe("persisted");
+    expect(plugin.settings.topLevel).toBe(3);
+    expect((state.savedData.at(-1) as { settings?: unknown }).settings).toEqual(
+      expect.objectContaining({ mode: "persisted", topLevel: 3 }),
     );
   });
 

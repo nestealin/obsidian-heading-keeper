@@ -49,11 +49,77 @@ import {
   PersistedPreviewModal,
   RecoveryCenterModal,
 } from "../src/persisted-modal.js";
-import { buildWorkflowPreview } from "../src/persisted-workflow.js";
+import {
+  buildWorkflowPreview,
+  PREVIEW_REASON_CODES,
+  type PreviewReasonCode,
+} from "../src/persisted-workflow.js";
 import { sha256Text } from "../src/persistence/plan-service.js";
 import { DEFAULT_STORED_SETTINGS } from "../src/settings.js";
 
 describe("persisted modals", () => {
+  it.each(["en", "zh"] as const)(
+    "renders a localized description for every current reason code in %s",
+    (locale) => {
+      const modal = new PersistedPreviewModal(
+        {} as never,
+        {
+          previewKind: "add",
+          targetPath: "Target.md",
+          groups: {
+            targetEdits: [],
+            linkSources: [],
+            preserved: PREVIEW_REASON_CODES.map((code) => ({
+              path: `${code}.md`,
+              code,
+            })),
+            skips: [],
+            recoveryBoundary: [],
+          },
+        },
+        locale,
+        vi.fn(),
+      );
+
+      modal.open();
+      const text = allText(modal.contentEl as unknown as FakeElement);
+      for (const code of PREVIEW_REASON_CODES) {
+        expect(
+          text.some((line) =>
+            new RegExp(`^${code}\\.md: .+ \\[${code}\\]$`).test(line),
+          ),
+        ).toBe(true);
+      }
+    },
+  );
+
+  it("describes a pure file link diagnostic in Chinese", async () => {
+    const result = await buildWorkflowPreview(
+      {
+        kind: "add",
+        targetPath: "Target.md",
+        sources: [{ path: "Target.md", text: "## Alpha\n[[Page]]" }],
+        settings: { ...DEFAULT_STORED_SETTINGS, mode: "persisted" },
+        resolveTarget: () => {
+          throw new Error("pure file links must not resolve");
+        },
+      },
+      {
+        createId: () => "pure-file",
+        now: () => "2026-08-25T00:00:00.000Z",
+        hashText: sha256Text,
+      },
+    );
+    expect(result.kind).toBe("preview");
+    if (result.kind !== "preview") return;
+
+    const modal = new PersistedPreviewModal({} as never, result, "zh", vi.fn());
+    modal.open();
+    expect(allText(modal.contentEl as unknown as FakeElement)).toContain(
+      "Target.md: 原因：链接没有标题片段 [missing-heading-fragment]",
+    );
+  });
+
   it.each([
     ["en", "Add persisted numbering — Target.md", "Link edits (1)"],
     ["zh", "写入标题编号 — Target.md", "链接编辑 (1)"],
@@ -190,7 +256,12 @@ describe("persisted modals", () => {
           ],
           linkSources: [],
           preserved: [{ path: "目标.md", code: "semantic-prefix" }],
-          skips: [{ path: "目标.md", code: "future-code" }],
+          skips: [
+            {
+              path: "目标.md",
+              code: "future-code" as unknown as PreviewReasonCode,
+            },
+          ],
           recoveryBoundary: ["source-hash-preflight"],
         },
       },

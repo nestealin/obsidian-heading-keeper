@@ -7,6 +7,7 @@ import {
 import {
   planHeadingLinkChanges,
   type HeadingRename,
+  type LinkDiagnosticCode,
   type ResolvedTarget,
 } from "@heading-numbering/link-core";
 import { buildPersistedOperation } from "./persistence/plan-service.js";
@@ -35,9 +36,44 @@ export interface WorkflowPreviewInput {
   ) => ResolvedTarget;
 }
 
+export const WORKFLOW_REASON_CODES = [
+  "ambiguous-prefix",
+  "semantic-prefix",
+  "missing-parent",
+  "heading-outside-range",
+  "heading-missing-top-level",
+  "heading-not-numbered",
+] as const;
+
+export type WorkflowReasonCode = (typeof WORKFLOW_REASON_CODES)[number];
+export type PreviewReasonCode = LinkDiagnosticCode | WorkflowReasonCode;
+
+const PREVIEW_REASON_CODE_SET = {
+  "missing-heading-fragment": true,
+  "external-link": true,
+  "malformed-percent-encoding": true,
+  "block-reference": true,
+  "target-resolution-error": true,
+  "target-missing": true,
+  "target-ambiguous": true,
+  "target-external": true,
+  "target-path-invalid": true,
+  "duplicate-heading-rename": true,
+  "ambiguous-prefix": true,
+  "semantic-prefix": true,
+  "missing-parent": true,
+  "heading-outside-range": true,
+  "heading-missing-top-level": true,
+  "heading-not-numbered": true,
+} as const satisfies Record<PreviewReasonCode, true>;
+
+export const PREVIEW_REASON_CODES = Object.keys(
+  PREVIEW_REASON_CODE_SET,
+) as PreviewReasonCode[];
+
 export interface PreviewPreservedItem {
   readonly path: string;
-  readonly code: string;
+  readonly code: PreviewReasonCode;
   readonly line?: number;
 }
 
@@ -67,11 +103,16 @@ function stableSkipCode(
   entry: NumberingPlanEntry,
   plan: NumberingPlan,
   settings: StoredSettings,
-): string {
+): WorkflowReasonCode {
   const diagnostic = plan.diagnostics.find(
     (item) => item.line === entry.heading.line,
   );
-  if (diagnostic) return diagnostic.code;
+  if (
+    diagnostic?.code === "missing-parent" ||
+    diagnostic?.code === "ambiguous-prefix"
+  ) {
+    return diagnostic.code;
+  }
   if (
     entry.heading.level < settings.topLevel ||
     entry.heading.level > settings.bottomLevel
