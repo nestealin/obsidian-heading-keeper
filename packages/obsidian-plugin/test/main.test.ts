@@ -3,8 +3,11 @@ import { DEFAULT_STORED_SETTINGS } from "../src/settings.js";
 
 const state = vi.hoisted(() => ({
   commands: [] as Array<{ id: string; callback?: () => void }>,
+  editorExtensions: [] as unknown[],
   loadedData: undefined as unknown,
   notices: [] as string[],
+  postProcessors: [] as unknown[],
+  readingMarkdown: new Map<string, string>(),
   savedData: [] as unknown[],
   settingRows: [] as Array<{
     controls: string[];
@@ -23,15 +26,25 @@ vi.mock("obsidian", () => {
         openTabById: vi.fn(),
       },
       vault: {
+        getAbstractFileByPath: (path: string) => new TFile(path),
         modify: () => {
           state.vaultWrites += 1;
         },
+        read: async (file: TFile) => state.readingMarkdown.get(file.path) ?? "",
       },
     };
     manifest = { id: "heading-numbering" };
 
     addCommand(command: { id: string; callback?: () => void }) {
       state.commands.push(command);
+    }
+
+    registerEditorExtension(extension: unknown) {
+      state.editorExtensions.push(extension);
+    }
+
+    registerMarkdownPostProcessor(processor: unknown) {
+      state.postProcessors.push(processor);
     }
 
     addSettingTab(tab: unknown) {
@@ -63,6 +76,10 @@ vi.mock("obsidian", () => {
     constructor(message: string) {
       state.notices.push(message);
     }
+  }
+
+  class TFile {
+    constructor(readonly path: string) {}
   }
 
   class Setting {
@@ -123,15 +140,18 @@ vi.mock("obsidian", () => {
     }
   }
 
-  return { Notice, Plugin, PluginSettingTab, Setting };
+  return { Notice, Plugin, PluginSettingTab, Setting, TFile };
 });
 
 import { HeadingNumberingPlugin } from "../src/main.js";
 
 beforeEach(() => {
   state.commands.length = 0;
+  state.editorExtensions.length = 0;
   state.loadedData = undefined;
   state.notices.length = 0;
+  state.postProcessors.length = 0;
+  state.readingMarkdown.clear();
   state.savedData.length = 0;
   state.settingRows.length = 0;
   state.settingTabs.length = 0;
@@ -158,6 +178,8 @@ describe("HeadingNumberingPlugin", () => {
       "open-settings",
     ]);
     expect(state.settingTabs).toHaveLength(1);
+    expect(state.editorExtensions).toHaveLength(1);
+    expect(state.postProcessors).toHaveLength(1);
     expect(state.vaultWrites).toBe(0);
   });
 
@@ -263,4 +285,106 @@ describe("HeadingNumberingPlugin", () => {
       true,
     );
   });
+
+  it("refreshes owned Reading prefixes on settings changes and cleans them on unload", async () => {
+    const root = createReadingRoot(2);
+    state.readingMarkdown.set("virtual.md", "## Root");
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    const processor = state.postProcessors[0] as (
+      root: HTMLElement,
+      context: { sourcePath: string },
+    ) => Promise<void>;
+
+    await processor(root as unknown as HTMLElement, {
+      sourcePath: "virtual.md",
+    });
+    expect(root.prefixes()).toEqual(["1. "]);
+
+    await plugin.saveSettings({ ...plugin.settings, titleSeparator: " · " });
+    expect(root.prefixes()).toEqual(["1 · "]);
+
+    plugin.onunload();
+    expect(root.prefixes()).toEqual([]);
+    expect(state.vaultWrites).toBe(0);
+  });
 });
+
+function createReadingRoot(level: number) {
+  class ReadingElement {
+    readonly attributes = new Map<string, string>();
+    readonly children: ReadingElement[] = [];
+    className = "";
+    parentElement: ReadingElement | undefined;
+    textContent = "";
+
+    constructor(readonly tagName: string) {}
+
+    get firstChild(): ReadingElement | undefined {
+      return this.children[0];
+    }
+
+    readonly ownerDocument = {
+      createElement: (tagName: string) =>
+        new ReadingElement(tagName.toUpperCase()),
+    };
+
+    appendChild(child: ReadingElement): void {
+      child.parentElement = this;
+      this.children.push(child);
+    }
+
+    insertBefore(
+      child: ReadingElement,
+      before: ReadingElement | undefined,
+    ): void {
+      child.parentElement = this;
+      const index = before ? this.children.indexOf(before) : -1;
+      if (index < 0) {
+        this.children.push(child);
+      } else {
+        this.children.splice(index, 0, child);
+      }
+    }
+
+    remove(): void {
+      const index = this.parentElement?.children.indexOf(this) ?? -1;
+      if (index >= 0) {
+        this.parentElement?.children.splice(index, 1);
+      }
+    }
+
+    setAttribute(name: string, value: string): void {
+      this.attributes.set(name, value);
+    }
+
+    querySelectorAll(selector: string): ReadingElement[] {
+      const headingSelector = selector === "h1, h2, h3, h4, h5, h6";
+      const result: ReadingElement[] = [];
+      const visit = (node: ReadingElement): void => {
+        for (const child of node.children) {
+          if (
+            (headingSelector && /^H[1-6]$/.test(child.tagName)) ||
+            (selector === ".heading-numbering-prefix" &&
+              child.className === "heading-numbering-prefix")
+          ) {
+            result.push(child);
+          }
+          visit(child);
+        }
+      };
+      visit(this);
+      return result;
+    }
+
+    prefixes(): string[] {
+      return this.querySelectorAll(".heading-numbering-prefix").map(
+        (prefix) => prefix.textContent,
+      );
+    }
+  }
+
+  const root = new ReadingElement("DIV");
+  root.appendChild(new ReadingElement(`H${level}`));
+  return root;
+}

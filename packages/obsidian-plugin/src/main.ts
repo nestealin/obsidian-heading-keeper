@@ -1,4 +1,11 @@
-import { Notice, Plugin, PluginSettingTab, Setting, type App } from "obsidian";
+import {
+  Notice,
+  Plugin,
+  PluginSettingTab,
+  Setting,
+  TFile,
+  type App,
+} from "obsidian";
 import {
   resolveLocale,
   translate,
@@ -12,6 +19,14 @@ import {
   validateStoredSettings,
 } from "./settings.js";
 import type { FieldError } from "@heading-numbering/core";
+import {
+  createHeadingNumberingExtension,
+  refreshHeadingNumberingExtensions,
+} from "./editor-extension.js";
+import {
+  clearHeadingNumberingPrefixes,
+  decorateReadingHeadings,
+} from "./reading-processor.js";
 
 export { resolveLocale, translate } from "./i18n.js";
 export type { StoredSettings } from "./settings.js";
@@ -180,10 +195,17 @@ export class HeadingNumberingSettingTab extends PluginSettingTab {
 export class HeadingNumberingPlugin extends Plugin {
   settings: StoredSettings = { ...DEFAULT_STORED_SETTINGS };
   settingsErrors: FieldError[] = [];
+  private readonly readingRoots = new Map<HTMLElement, string>();
 
   async onload(): Promise<void> {
     await this.loadSettings();
     this.addSettingTab(new HeadingNumberingSettingTab(this.app, this));
+    this.registerEditorExtension(
+      createHeadingNumberingExtension(() => this.settings),
+    );
+    this.registerMarkdownPostProcessor(async (root, context) => {
+      await this.decorateReadingRoot(root, context.sourcePath);
+    });
     this.addCommand({
       id: commandIds.preview,
       name: translate(this.currentLocale(), "commands.preview"),
@@ -202,7 +224,10 @@ export class HeadingNumberingPlugin extends Plugin {
     this.addCommand({
       id: commandIds.refresh,
       name: translate(this.currentLocale(), "commands.refresh"),
-      callback: () => this.showNotice("notices.refresh"),
+      callback: () => {
+        void this.refreshVirtualRendering();
+        this.showNotice("notices.refresh");
+      },
     });
     this.addCommand({
       id: commandIds.openSettings,
@@ -211,7 +236,12 @@ export class HeadingNumberingPlugin extends Plugin {
     });
   }
 
-  onunload(): void {}
+  onunload(): void {
+    for (const root of this.readingRoots.keys()) {
+      clearHeadingNumberingPrefixes(root);
+    }
+    this.readingRoots.clear();
+  }
 
   async loadSettings(): Promise<void> {
     const saved = await this.loadData();
@@ -237,6 +267,7 @@ export class HeadingNumberingPlugin extends Plugin {
     this.settings = validation.value;
     this.settingsErrors = [];
     await this.saveData(this.settings);
+    await this.refreshVirtualRendering();
     return true;
   }
 
@@ -244,6 +275,28 @@ export class HeadingNumberingPlugin extends Plugin {
     const systemLocale =
       typeof navigator === "undefined" ? "en" : navigator.language;
     return resolveLocale(this.settings.locale, systemLocale);
+  }
+
+  private async decorateReadingRoot(
+    root: HTMLElement,
+    sourcePath: string,
+  ): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(sourcePath);
+    if (!(file instanceof TFile)) {
+      return;
+    }
+    const markdown = await this.app.vault.read(file);
+    this.readingRoots.set(root, sourcePath);
+    decorateReadingHeadings(root, markdown, this.settings);
+  }
+
+  private async refreshVirtualRendering(): Promise<void> {
+    refreshHeadingNumberingExtensions();
+    await Promise.all(
+      Array.from(this.readingRoots, async ([root, sourcePath]) => {
+        await this.decorateReadingRoot(root, sourcePath);
+      }),
+    );
   }
 
   private showNotice(
