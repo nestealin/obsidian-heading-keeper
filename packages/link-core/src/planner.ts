@@ -23,9 +23,10 @@ function normalizeTargetPath(path: string): string | null {
   const normalizedSegments: string[] = [];
   for (const segment of unifiedPath.split("/")) {
     if (segment === "") return null;
-    if (segment === "." || segment === "..") {
+    if (segment === ".") continue;
+    if (segment === "..") {
       if (normalizedSegments.length === 0) return null;
-      if (segment === "..") normalizedSegments.pop();
+      normalizedSegments.pop();
       continue;
     }
     normalizedSegments.push(segment.normalize("NFC"));

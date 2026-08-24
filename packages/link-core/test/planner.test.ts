@@ -338,6 +338,36 @@ describe("planHeadingLinkChanges", () => {
     expect(changes).toEqual({ edits: [], diagnostics: [] });
   });
 
+  it.each([
+    ["leading safe dot segment", "./Target.md", "Target.md"],
+    ["internal safe dot segment", "Folder/./Target.md", "Folder/Target.md"],
+  ])("matches a rename through a %s", (_name, path, targetPath) => {
+    const changes = planHeadingLinkChanges({
+      sourcePath: "Refs.md",
+      markdown: "[[Target#Old]]",
+      renames: [
+        {
+          targetPath: path,
+          oldHeading: "Old",
+          newHeading: "1. Old",
+        },
+      ],
+      resolveTarget: () => ({ kind: "file", path }),
+    });
+
+    expect(changes).toEqual({
+      edits: [
+        {
+          range: { from: 0, to: 14 },
+          replacement: "[[Target#1. Old]]",
+          targetPath,
+          reason: "unique-heading-rename",
+        },
+      ],
+      diagnostics: [],
+    });
+  });
+
   it("diagnoses a resolver error per token and continues planning", () => {
     const changes = planHeadingLinkChanges({
       sourcePath: "Refs.md",
