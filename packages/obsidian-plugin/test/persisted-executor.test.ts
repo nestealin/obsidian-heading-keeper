@@ -45,6 +45,13 @@ function operation(
   };
 }
 
+function completedOperation(): PersistedOperation {
+  return {
+    ...operation("completed"),
+    completedPaths: ["Target.md", "a.md", "z.md"],
+  };
+}
+
 function harness(initial: Record<string, string>) {
   const content = new Map(Object.entries(initial));
   const events: string[] = [];
@@ -240,10 +247,7 @@ describe("executePersistedOperation", () => {
 
   it("is idempotent when the same preview identity already has a durable completed journal", async () => {
     const state = harness({});
-    const completed: PersistedOperation = {
-      ...operation("completed"),
-      completedPaths: ["Target.md", "a.md", "z.md"],
-    };
+    const completed = completedOperation();
     state.journal.load = async () => completed;
     const result = await executePersistedOperation(operation(), {
       vault: state.vault,
@@ -254,8 +258,70 @@ describe("executePersistedOperation", () => {
     expect(state.events).toEqual([]);
   });
 
+  it("replays the completed result of a first execution without Vault access", async () => {
+    const state = harness({
+      "Target.md": "before target",
+      "a.md": "before a",
+      "z.md": "before z",
+    });
+    const first = await executePersistedOperation(operation(), {
+      vault: state.vault,
+      journal: state.journal,
+      hashText,
+    });
+    expect(first.kind).toBe("completed");
+    state.journal.load = async () => first.operation;
+    state.events.length = 0;
+
+    const replay = await executePersistedOperation(first.operation, {
+      vault: state.vault,
+      journal: state.journal,
+      hashText,
+    });
+
+    expect(replay.kind).toBe("completed");
+    expect(state.events).toEqual([]);
+  });
+
   it.each([
-    ["non-preview caller state", () => operation("completed")],
+    ["missing", null],
+    ["previewed", operation()],
+    ["started", operation("applying")],
+    [
+      "identity mismatch",
+      {
+        ...completedOperation(),
+        files: [
+          {
+            ...completedOperation().files[0]!,
+            afterText: "different",
+            afterHash: "hash:different",
+          },
+          ...completedOperation().files.slice(1),
+        ],
+      },
+    ],
+  ])(
+    "rejects completed caller replay against %s durable state",
+    async (_label, durable) => {
+      const state = harness({});
+      state.journal.load = async () => durable;
+      const result = await executePersistedOperation(completedOperation(), {
+        vault: state.vault,
+        journal: state.journal,
+        hashText,
+      });
+      expect(result).toMatchObject({
+        kind: "recovery-required",
+        code: "operation-conflict",
+      });
+      expect(state.events).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["applying caller state", () => operation("applying")],
+    ["restored caller state", () => operation("restored")],
     [
       "duplicate paths",
       () => {

@@ -32,7 +32,9 @@ function validState(
   mode: OperationValidationMode,
 ): boolean {
   if (!operationStates.includes(state)) return false;
-  if (mode === "execute-caller") return state === "previewed";
+  if (mode === "execute-caller") {
+    return state === "previewed" || state === "completed";
+  }
   if (mode === "restore") return restoreStates.includes(state);
   return true;
 }

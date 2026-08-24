@@ -86,7 +86,11 @@ export async function executePersistedOperation(
     };
   }
   let executable = caller;
-  if (durable) {
+  if (!durable) {
+    if (caller.state === "completed") {
+      return invalidExecutionResult(caller, "operation-conflict");
+    }
+  } else {
     const durableValidation = await validatePersistedOperation(
       durable,
       dependencies.hashText,
@@ -98,6 +102,11 @@ export async function executePersistedOperation(
     const durableSnapshot = durableValidation.operation;
     if (!sameOperationIdentity(caller, durableSnapshot)) {
       return invalidExecutionResult(durableSnapshot, "operation-conflict");
+    }
+    if (caller.state === "completed") {
+      return durableSnapshot.state === "completed"
+        ? { kind: "completed", operation: durableSnapshot }
+        : invalidExecutionResult(durableSnapshot, "operation-conflict");
     }
     if (durableSnapshot.state === "completed") {
       return { kind: "completed", operation: durableSnapshot };
