@@ -4,11 +4,14 @@ import { DEFAULT_STORED_SETTINGS } from "../src/settings.js";
 const state = vi.hoisted(() => ({
   commands: [] as Array<{ id: string; callback?: () => void }>,
   editorExtensions: [] as unknown[],
+  editorRefreshes: 0,
   loadedData: undefined as unknown,
   notices: [] as string[],
   postProcessors: [] as unknown[],
   renderChildren: [] as Array<{ onunload: () => void }>,
   readQueue: [] as Promise<string>[],
+  vaultReadPaths: [] as string[],
+  vaultReads: 0,
   readingMarkdown: new Map<string, string>(),
   savedData: [] as unknown[],
   settingRows: [] as Array<{
@@ -32,8 +35,15 @@ vi.mock("obsidian", () => {
         modify: () => {
           state.vaultWrites += 1;
         },
-        read: async (file: TFile) =>
-          state.readQueue.shift() ?? state.readingMarkdown.get(file.path) ?? "",
+        read: async (file: TFile) => {
+          state.vaultReads += 1;
+          state.vaultReadPaths.push(file.path);
+          return (
+            state.readQueue.shift() ??
+            state.readingMarkdown.get(file.path) ??
+            ""
+          );
+        },
       },
     };
     manifest = { id: "heading-numbering" };
@@ -159,16 +169,26 @@ vi.mock("obsidian", () => {
   };
 });
 
+vi.mock("../src/editor-extension.js", () => ({
+  createHeadingNumberingExtension: () => ({}),
+  refreshHeadingNumberingExtensions: () => {
+    state.editorRefreshes += 1;
+  },
+}));
+
 import { HeadingNumberingPlugin } from "../src/main.js";
 
 beforeEach(() => {
   state.commands.length = 0;
   state.editorExtensions.length = 0;
+  state.editorRefreshes = 0;
   state.loadedData = undefined;
   state.notices.length = 0;
   state.postProcessors.length = 0;
   state.renderChildren.length = 0;
   state.readQueue.length = 0;
+  state.vaultReadPaths.length = 0;
+  state.vaultReads = 0;
   state.readingMarkdown.clear();
   state.savedData.length = 0;
   state.settingRows.length = 0;
@@ -456,6 +476,137 @@ describe("HeadingNumberingPlugin", () => {
       expect(child.prefixes()).toEqual(["1. "]);
       plugin.onunload();
     }
+  });
+
+  it("reads each independent section once without refreshing editor decorations", async () => {
+    const roots = [
+      createReadingRoot(2),
+      createReadingRoot(2),
+      createReadingRoot(2),
+    ];
+    state.readingMarkdown.set("many.md", "## A\n## B\n## C");
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    const processor = state.postProcessors.at(-1) as (
+      root: HTMLElement,
+      context: ReturnType<typeof readingContext>,
+    ) => Promise<void>;
+
+    for (const [index, root] of roots.entries()) {
+      await processor(
+        root as unknown as HTMLElement,
+        readingContext({ lineEnd: index, lineStart: index }, "many.md"),
+      );
+    }
+
+    expect(state.vaultReads).toBe(3);
+    expect(state.editorRefreshes).toBe(0);
+    expect(roots.map((root) => root.prefixes())).toEqual([
+      ["1. "],
+      ["2. "],
+      ["3. "],
+    ]);
+  });
+
+  it("keeps one vault read per section across one hundred independent sections", async () => {
+    const roots = Array.from({ length: 100 }, () => createReadingRoot(2));
+    state.readingMarkdown.set(
+      "hundred.md",
+      Array.from({ length: 100 }, (_, index) => `## Heading ${index + 1}`).join(
+        "\n",
+      ),
+    );
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    const processor = state.postProcessors.at(-1) as (
+      root: HTMLElement,
+      context: ReturnType<typeof readingContext>,
+    ) => Promise<void>;
+
+    for (const [index, root] of roots.entries()) {
+      await processor(
+        root as unknown as HTMLElement,
+        readingContext({ lineEnd: index, lineStart: index }, "hundred.md"),
+      );
+    }
+
+    expect(state.vaultReads).toBe(100);
+    expect(state.editorRefreshes).toBe(0);
+    expect(roots[99]?.prefixes()).toEqual(["100. "]);
+  });
+
+  it("refreshes only nested ancestors and not a sibling root", async () => {
+    const parent = createReadingRoot(2);
+    const child = createReadingRoot(2);
+    const sibling = createReadingRoot(2);
+    parent.appendChild(child);
+    state.readingMarkdown.set("Parent.md", "## Parent\n![[Child]]");
+    state.readingMarkdown.set("Child.md", "## Child");
+    state.readingMarkdown.set("Sibling.md", "## Sibling");
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    const processor = state.postProcessors.at(-1) as (
+      root: HTMLElement,
+      context: ReturnType<typeof readingContext>,
+    ) => Promise<void>;
+
+    await processor(
+      sibling as unknown as HTMLElement,
+      readingContext({ lineEnd: 0, lineStart: 0 }, "Sibling.md"),
+    );
+    await processor(
+      parent as unknown as HTMLElement,
+      readingContext({ lineEnd: 1, lineStart: 0 }, "Parent.md"),
+    );
+    await processor(
+      child as unknown as HTMLElement,
+      readingContext({ lineEnd: 0, lineStart: 0 }, "Child.md"),
+    );
+
+    expect(state.vaultReadPaths).toEqual([
+      "Sibling.md",
+      "Parent.md",
+      "Child.md",
+      "Parent.md",
+    ]);
+    expect(sibling.prefixes()).toEqual(["1. "]);
+    expect(parent.prefixes()).toEqual(["1. ", "1. "]);
+    expect(state.editorRefreshes).toBe(0);
+  });
+
+  it("batches same-source nested ancestors into one refresh read", async () => {
+    const grandparent = createReadingRoot(2);
+    const parent = createReadingRoot(3);
+    const child = createReadingRoot(4);
+    grandparent.appendChild(parent);
+    parent.appendChild(child);
+    state.readingMarkdown.set(
+      "nested.md",
+      "## Grandparent\n### Parent\n#### Child",
+    );
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    const processor = state.postProcessors.at(-1) as (
+      root: HTMLElement,
+      context: ReturnType<typeof readingContext>,
+    ) => Promise<void>;
+
+    await processor(
+      grandparent as unknown as HTMLElement,
+      readingContext({ lineEnd: 2, lineStart: 0 }, "nested.md"),
+    );
+    await processor(
+      parent as unknown as HTMLElement,
+      readingContext({ lineEnd: 2, lineStart: 1 }, "nested.md"),
+    );
+    const readsBeforeChild = state.vaultReads;
+    await processor(
+      child as unknown as HTMLElement,
+      readingContext({ lineEnd: 2, lineStart: 2 }, "nested.md"),
+    );
+
+    expect(state.vaultReads - readsBeforeChild).toBe(2);
+    expect(state.editorRefreshes).toBe(0);
   });
 });
 

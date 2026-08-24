@@ -49,6 +49,11 @@ interface ReadingRootState {
   token: object;
 }
 
+interface ReadingRequest {
+  generation: number;
+  request: number;
+}
+
 class ReadingRenderChild extends MarkdownRenderChild {
   constructor(
     root: HTMLElement,
@@ -248,7 +253,7 @@ export class HeadingNumberingPlugin extends Plugin {
       this.readingRoots.set(root, state);
       registerReadingRoot(root, section, context.sourcePath);
       if (await this.decorateReadingRoot(root, state)) {
-        await this.refreshVirtualRendering();
+        await this.refreshReadingAncestors(root);
       }
     });
     this.addCommand({
@@ -328,11 +333,9 @@ export class HeadingNumberingPlugin extends Plugin {
     root: HTMLElement,
     state: ReadingRootState,
   ): Promise<boolean> {
-    const request = state.request + 1;
-    state.request = request;
-    const generation = this.renderGeneration;
+    const readingRequest = this.beginReadingRequest(state);
     if (!state.section) {
-      if (this.isReadingRequestCurrent(root, state, request, generation)) {
+      if (this.isReadingRequestCurrent(root, state, readingRequest)) {
         decorateReadingHeadings(
           root,
           "",
@@ -347,24 +350,77 @@ export class HeadingNumberingPlugin extends Plugin {
 
     const file = this.app.vault.getAbstractFileByPath(state.sourcePath);
     if (!(file instanceof TFile)) {
-      if (this.isReadingRequestCurrent(root, state, request, generation)) {
+      if (this.isReadingRequestCurrent(root, state, readingRequest)) {
         disposeReadingRoot(root);
         return true;
       }
       return false;
     }
     const markdown = await this.app.vault.read(file);
-    if (!this.isReadingRequestCurrent(root, state, request, generation)) {
-      return false;
+    return this.applyReadingMarkdown(root, state, readingRequest, markdown);
+  }
+
+  private async refreshReadingAncestors(root: HTMLElement): Promise<void> {
+    if (this.disposed) {
+      return;
     }
-    decorateReadingHeadings(
-      root,
-      markdown,
-      this.settings,
-      state.section,
-      state.sourcePath,
+    const batches = new Map<
+      string,
+      Array<{
+        root: HTMLElement;
+        state: ReadingRootState;
+        request: ReadingRequest;
+      }>
+    >();
+    for (const [candidate, state] of this.readingRoots) {
+      if (candidate === root || !this.isReadingAncestor(candidate, root)) {
+        continue;
+      }
+      const request = this.beginReadingRequest(state);
+      if (!state.section) {
+        if (this.isReadingRequestCurrent(candidate, state, request)) {
+          decorateReadingHeadings(
+            candidate,
+            "",
+            this.settings,
+            null,
+            state.sourcePath,
+          );
+        }
+        continue;
+      }
+      const batch = batches.get(state.sourcePath) ?? [];
+      batch.push({ root: candidate, state, request });
+      batches.set(state.sourcePath, batch);
+    }
+    await Promise.all(
+      Array.from(batches, async ([sourcePath, batch]) => {
+        const file = this.app.vault.getAbstractFileByPath(sourcePath);
+        if (!(file instanceof TFile)) {
+          for (const target of batch) {
+            if (
+              this.isReadingRequestCurrent(
+                target.root,
+                target.state,
+                target.request,
+              )
+            ) {
+              disposeReadingRoot(target.root);
+            }
+          }
+          return;
+        }
+        const markdown = await this.app.vault.read(file);
+        for (const target of batch) {
+          this.applyReadingMarkdown(
+            target.root,
+            target.state,
+            target.request,
+            markdown,
+          );
+        }
+      }),
     );
-    return true;
   }
 
   private async refreshVirtualRendering(): Promise<void> {
@@ -382,15 +438,50 @@ export class HeadingNumberingPlugin extends Plugin {
   private isReadingRequestCurrent(
     root: HTMLElement,
     state: ReadingRootState,
-    request: number,
-    generation: number,
+    request: ReadingRequest,
   ): boolean {
     return (
       !this.disposed &&
-      this.renderGeneration === generation &&
+      this.renderGeneration === request.generation &&
       this.readingRoots.get(root) === state &&
-      state.request === request
+      state.request === request.request
     );
+  }
+
+  private beginReadingRequest(state: ReadingRootState): ReadingRequest {
+    const request = state.request + 1;
+    state.request = request;
+    return { generation: this.renderGeneration, request };
+  }
+
+  private applyReadingMarkdown(
+    root: HTMLElement,
+    state: ReadingRootState,
+    request: ReadingRequest,
+    markdown: string,
+  ): boolean {
+    if (!this.isReadingRequestCurrent(root, state, request)) {
+      return false;
+    }
+    decorateReadingHeadings(
+      root,
+      markdown,
+      this.settings,
+      state.section,
+      state.sourcePath,
+    );
+    return true;
+  }
+
+  private isReadingAncestor(ancestor: HTMLElement, root: HTMLElement): boolean {
+    let current = root.parentElement;
+    while (current) {
+      if (current === ancestor) {
+        return true;
+      }
+      current = current.parentElement;
+    }
+    return false;
   }
 
   private releaseReadingRoot(root: HTMLElement, token: object): void {
