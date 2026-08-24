@@ -26,12 +26,20 @@ const state = vi.hoisted(() => ({
 vi.mock("obsidian", () => {
   class Plugin {
     app = {
+      workspace: {
+        getActiveFile: () => null,
+        on: () => ({}),
+      },
+      metadataCache: {
+        getFirstLinkpathDest: () => null,
+      },
       setting: {
         open: vi.fn(),
         openTabById: vi.fn(),
       },
       vault: {
         getAbstractFileByPath: (path: string) => new TFile(path),
+        getMarkdownFiles: () => [],
         modify: () => {
           state.vaultWrites += 1;
         },
@@ -44,6 +52,7 @@ vi.mock("obsidian", () => {
             ""
           );
         },
+        on: () => ({}),
       },
     };
     manifest = { id: "heading-numbering" };
@@ -63,6 +72,8 @@ vi.mock("obsidian", () => {
     addSettingTab(tab: unknown) {
       state.settingTabs.push(tab);
     }
+
+    registerEvent() {}
 
     async loadData() {
       return state.loadedData;
@@ -92,7 +103,25 @@ vi.mock("obsidian", () => {
   }
 
   class TFile {
-    constructor(readonly path: string) {}
+    readonly extension: string;
+    constructor(readonly path: string) {
+      this.extension = path.endsWith(".md") ? "md" : "txt";
+    }
+  }
+
+  class Modal {
+    contentEl = {
+      createEl: vi.fn(() => ({
+        addEventListener: vi.fn(),
+        createEl: vi.fn(),
+        setAttr: vi.fn(),
+      })),
+      empty: vi.fn(),
+      setAttr: vi.fn(),
+    };
+    constructor(readonly app: unknown) {}
+    open() {}
+    close() {}
   }
 
   class MarkdownRenderChild {
@@ -133,6 +162,12 @@ vi.mock("obsidian", () => {
       callback(new TextComponent());
       return this;
     }
+
+    addButton(callback: (component: ButtonComponent) => void) {
+      this.row.controls.push("button");
+      callback(new ButtonComponent());
+      return this;
+    }
   }
 
   class Dropdown {
@@ -159,8 +194,18 @@ vi.mock("obsidian", () => {
     }
   }
 
+  class ButtonComponent {
+    onClick() {
+      return this;
+    }
+    setButtonText() {
+      return this;
+    }
+  }
+
   return {
     MarkdownRenderChild,
+    Modal,
     Notice,
     Plugin,
     PluginSettingTab,
@@ -245,7 +290,11 @@ describe("HeadingNumberingPlugin", () => {
     ).resolves.toBe(false);
 
     expect(state.savedData).toEqual([
-      expect.objectContaining({ locale: "zh", topLevel: 2 }),
+      expect.objectContaining({
+        settings: expect.objectContaining({ locale: "zh", topLevel: 2 }),
+        journals: {},
+        latestJournalId: null,
+      }),
     ]);
     expect(plugin.settings.locale).toBe("zh");
     expect(state.vaultWrites).toBe(0);
@@ -318,6 +367,7 @@ describe("HeadingNumberingPlugin", () => {
       "Title separator",
       "Gap strategy",
       "Language",
+      "Recovery center",
     ]);
     expect(state.settingRows.every((row) => row.description.length > 0)).toBe(
       true,

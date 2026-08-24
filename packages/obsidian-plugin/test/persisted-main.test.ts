@@ -1,0 +1,372 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_STORED_SETTINGS } from "../src/settings.js";
+
+const state = vi.hoisted(() => ({
+  activePath: null as string | null,
+  commands: [] as Array<{ id: string; callback: () => void }>,
+  events: new Map<string, Array<(...args: unknown[]) => void>>(),
+  files: new Map<string, string>(),
+  linkTargets: new Map<string, string>(),
+  loadedData: undefined as unknown,
+  modals: [] as unknown[],
+  notices: [] as string[],
+  readQueue: [] as Promise<string>[],
+  reads: 0,
+  savedData: [] as unknown[],
+  settingAvailable: true,
+  settingOpens: 0,
+  settingTabIds: [] as string[],
+  writes: [] as Array<[string, string]>,
+}));
+
+vi.mock("obsidian", () => {
+  class TFile {
+    extension: string;
+    constructor(readonly path: string) {
+      this.extension = path.endsWith(".md") ? "md" : "txt";
+    }
+  }
+  const file = (path: string | null) =>
+    path && state.files.has(path) ? new TFile(path) : null;
+  const on = (name: string, callback: (...args: unknown[]) => void) => {
+    const callbacks = state.events.get(name) ?? [];
+    callbacks.push(callback);
+    state.events.set(name, callbacks);
+    return { name, callback };
+  };
+  class Plugin {
+    app = {
+      workspace: {
+        getActiveFile: () => file(state.activePath),
+        on,
+      },
+      vault: {
+        getAbstractFileByPath: (path: string) => file(path),
+        getMarkdownFiles: () =>
+          [...state.files.keys()]
+            .filter((path) => path.endsWith(".md"))
+            .map((path) => new TFile(path)),
+        modify: async (target: TFile, text: string) => {
+          state.writes.push([target.path, text]);
+          state.files.set(target.path, text);
+        },
+        on,
+        read: async (target: TFile) => {
+          state.reads += 1;
+          const queued = state.readQueue.shift();
+          if (queued) return queued;
+          const text = state.files.get(target.path);
+          if (text === undefined) throw new Error("missing");
+          return text;
+        },
+      },
+      metadataCache: {
+        getFirstLinkpathDest: (linkPath: string) =>
+          file(state.linkTargets.get(linkPath) ?? null),
+      },
+      get setting() {
+        return state.settingAvailable
+          ? {
+              open: () => {
+                state.settingOpens += 1;
+              },
+              openTabById: (id: string) => state.settingTabIds.push(id),
+            }
+          : {};
+      },
+    };
+    manifest = { id: "heading-numbering" };
+    addCommand(command: { id: string; callback: () => void }) {
+      state.commands.push(command);
+    }
+    addSettingTab() {}
+    registerEditorExtension() {}
+    registerMarkdownPostProcessor() {}
+    registerEvent() {}
+    async loadData() {
+      return state.loadedData;
+    }
+    async saveData(value: unknown) {
+      state.savedData.push(value);
+    }
+  }
+  class Modal {
+    contentEl = {
+      empty() {},
+      createEl() {
+        return { setAttr() {}, addEventListener() {}, createEl() {} };
+      },
+      setAttr() {},
+    };
+    constructor(readonly app: unknown) {}
+    open() {
+      state.modals.push(this);
+      (this as { onOpen?: () => void }).onOpen?.();
+    }
+    close() {
+      (this as { onClose?: () => void }).onClose?.();
+    }
+  }
+  class Notice {
+    constructor(message: string) {
+      state.notices.push(message);
+    }
+  }
+  class MarkdownRenderChild {
+    constructor(readonly containerEl: unknown) {}
+  }
+  class PluginSettingTab {
+    containerEl = { empty() {}, createEl() {} };
+    constructor(
+      readonly app: unknown,
+      readonly plugin: unknown,
+    ) {}
+  }
+  class Setting {
+    setName() {
+      return this;
+    }
+    setDesc() {
+      return this;
+    }
+    addDropdown() {
+      return this;
+    }
+    addText() {
+      return this;
+    }
+    addButton(
+      callback: (button: {
+        setButtonText(text: string): unknown;
+        onClick(cb: () => void): unknown;
+      }) => void,
+    ) {
+      callback({
+        setButtonText() {
+          return this;
+        },
+        onClick() {
+          return this;
+        },
+      });
+      return this;
+    }
+  }
+  return {
+    MarkdownRenderChild,
+    Modal,
+    Notice,
+    Plugin,
+    PluginSettingTab,
+    Setting,
+    TFile,
+  };
+});
+
+vi.mock("../src/editor-extension.js", () => ({
+  createHeadingNumberingExtension: () => ({}),
+  refreshHeadingNumberingExtensions: () => undefined,
+}));
+
+import { HeadingNumberingPlugin } from "../src/main.js";
+import { sha256Text } from "../src/persistence/plan-service.js";
+
+beforeEach(() => {
+  state.activePath = null;
+  state.commands.length = 0;
+  state.events.clear();
+  state.files.clear();
+  state.linkTargets.clear();
+  state.loadedData = { ...DEFAULT_STORED_SETTINGS, mode: "persisted" };
+  state.modals.length = 0;
+  state.notices.length = 0;
+  state.readQueue.length = 0;
+  state.reads = 0;
+  state.savedData.length = 0;
+  state.settingAvailable = true;
+  state.settingOpens = 0;
+  state.settingTabIds.length = 0;
+  state.writes.length = 0;
+});
+
+describe("persisted plugin workflow", () => {
+  it("rejects apply without an exact in-memory preview", async () => {
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    await plugin.applyCurrentPreview();
+    expect(state.writes).toEqual([]);
+    expect(state.notices.at(-1)).toBe("Create a persisted preview first.");
+  });
+
+  it("requires persisted mode for preview, apply, and removal", async () => {
+    state.loadedData = { ...DEFAULT_STORED_SETTINGS, mode: "virtual" };
+    state.activePath = "Target.md";
+    state.files.set("Target.md", "## Alpha");
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+
+    await plugin.previewPersisted("add");
+    await plugin.previewPersisted("remove");
+    await plugin.applyCurrentPreview();
+
+    expect(state.reads).toBe(0);
+    expect(state.writes).toEqual([]);
+    expect(state.notices).toEqual([
+      "Switch to persisted mode first.",
+      "Switch to persisted mode first.",
+      "Switch to persisted mode first.",
+    ]);
+  });
+
+  it("reports a no-op preview without retaining apply authority", async () => {
+    state.activePath = "Target.md";
+    state.files.set("Target.md", "# Outside");
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+
+    await plugin.previewPersisted("add");
+
+    expect(plugin.activePreview).toBeNull();
+    expect(state.modals).toHaveLength(0);
+    expect(state.notices.at(-1)).toBe("No safe persisted changes were found.");
+  });
+
+  it("previews and explicitly applies target and global link changes", async () => {
+    state.activePath = "Target.md";
+    state.files.set("Target.md", "## Alpha");
+    state.files.set("Links.md", "[[Target#Alpha|alias]]");
+    state.linkTargets.set("Target", "Target.md");
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+
+    await plugin.previewPersisted("add");
+    expect(plugin.activePreview?.targetPath).toBe("Target.md");
+    expect(state.modals).toHaveLength(1);
+    await plugin.applyCurrentPreview();
+
+    expect(state.files.get("Target.md")).toBe("## 1. Alpha");
+    expect(state.files.get("Links.md")).toBe("[[Target#1. Alpha|alias]]");
+    expect(state.notices.at(-1)).toBe("Persisted changes completed.");
+  });
+
+  it("invalidates preview on settings and active-file changes", async () => {
+    state.activePath = "Target.md";
+    state.files.set("Target.md", "## Alpha");
+    state.files.set("Other.md", "## Other");
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    await plugin.previewPersisted("add");
+    await plugin.saveSettings({ ...plugin.settings, titleSeparator: " · " });
+    await plugin.applyCurrentPreview();
+    expect(state.writes).toEqual([]);
+
+    await plugin.previewPersisted("add");
+    state.activePath = "Other.md";
+    state.events.get("file-open")?.forEach((callback) => callback());
+    await plugin.applyCurrentPreview();
+    expect(state.writes).toEqual([]);
+  });
+
+  it("keeps a stale source at zero writes through executor preflight", async () => {
+    state.activePath = "Target.md";
+    state.files.set("Target.md", "## Alpha");
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    await plugin.previewPersisted("add");
+    state.files.set("Target.md", "## external");
+
+    await plugin.applyCurrentPreview();
+
+    expect(state.writes).toEqual([]);
+    expect(state.notices.at(-1)).toBe(
+      "Preview is stale; no files were changed.",
+    );
+  });
+
+  it("previews removal and preserves semantic numeric headings", async () => {
+    state.activePath = "Target.md";
+    state.files.set("Target.md", "## 1. Alpha\r\n## 2026 plan");
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+
+    await plugin.previewPersisted("remove");
+    await plugin.applyCurrentPreview();
+
+    expect(state.files.get("Target.md")).toBe("## Alpha\r\n## 2026 plan");
+  });
+
+  it("guards the narrow settings capability and its stable fallback", async () => {
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    plugin.openSettings();
+    expect(state.settingOpens).toBe(1);
+    expect(state.settingTabIds).toEqual(["heading-numbering"]);
+
+    state.settingAvailable = false;
+    plugin.openSettings();
+    expect(state.notices.at(-1)).toBe(
+      "Open Obsidian Settings to configure Heading Numbering.",
+    );
+  });
+
+  it("reloads an interrupted durable journal and exposes recovery", async () => {
+    const beforeText = "## Alpha";
+    const afterText = "## 1. Alpha";
+    const operation = {
+      id: "recover-1",
+      createdAt: "2026-08-25T00:00:00.000Z",
+      state: "recovery-required" as const,
+      completedPaths: ["Target.md"],
+      files: [
+        {
+          path: "Target.md",
+          beforeText,
+          beforeHash: await sha256Text(beforeText),
+          afterText,
+          afterHash: await sha256Text(afterText),
+          role: "target" as const,
+        },
+      ],
+    };
+    state.activePath = "Target.md";
+    state.files.set("Target.md", afterText);
+    state.loadedData = {
+      settings: { ...DEFAULT_STORED_SETTINGS, mode: "persisted" },
+      journals: { "recover-1": operation },
+      latestJournalId: "recover-1",
+    };
+    const plugin = new HeadingNumberingPlugin();
+
+    await plugin.onload();
+    await plugin.openRecoveryCenter();
+
+    expect(state.notices[0]).toBe("A persisted operation requires recovery.");
+    expect(state.modals).toHaveLength(1);
+  });
+
+  it("drops a late preview callback after unload", async () => {
+    const delayed = deferred<string>();
+    state.activePath = "Target.md";
+    state.files.set("Target.md", "## Alpha");
+    state.readQueue.push(delayed.promise);
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+
+    const preview = plugin.previewPersisted("add");
+    plugin.onunload();
+    delayed.resolve("## Alpha");
+    await preview;
+
+    expect(plugin.activePreview).toBeNull();
+    expect(state.modals).toHaveLength(0);
+    expect(state.writes).toEqual([]);
+  });
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((fulfill) => {
+    resolve = fulfill;
+  });
+  return { promise, resolve };
+}

@@ -20,6 +20,26 @@ import {
   validateStoredSettings,
 } from "./settings.js";
 import type { FieldError } from "@heading-numbering/core";
+import { PluginDataStore } from "./plugin-data.js";
+import {
+  createObsidianLinkResolver,
+  ObsidianVaultFileAdapter,
+} from "./obsidian-adapters.js";
+import {
+  buildWorkflowPreview,
+  type WorkflowPreviewKind,
+  type WorkflowPreviewResult,
+} from "./persisted-workflow.js";
+import {
+  PersistedPreviewModal,
+  RecoveryCenterModal,
+} from "./persisted-modal.js";
+import {
+  executePersistedOperation,
+  inspectRecovery,
+  restoreEligibleFiles,
+} from "./persistence/executor.js";
+import { sha256Text } from "./persistence/plan-service.js";
 import {
   createHeadingNumberingExtension,
   refreshHeadingNumberingExtensions,
@@ -160,6 +180,17 @@ export class HeadingNumberingSettingTab extends PluginSettingTab {
           });
       });
 
+    new Setting(containerEl)
+      .setName(translate(locale, "settings.recovery"))
+      .setDesc(translate(locale, "settings.recoveryDescription"))
+      .addButton((button) => {
+        button
+          .setButtonText(translate(locale, "settings.openRecovery"))
+          .onClick(() => {
+            void this.headingNumbering.openRecoveryCenter();
+          });
+      });
+
     containerEl.createEl("p", {
       text: translate(locale, "settings.persistenceBoundary"),
     });
@@ -225,10 +256,28 @@ export class HeadingNumberingPlugin extends Plugin {
   settingsErrors: FieldError[] = [];
   private disposed = false;
   private renderGeneration = 0;
+  private lifecycleGeneration = 0;
+  private previewGeneration = 0;
+  private previewWasInvalidated = false;
+  private dataStore: PluginDataStore | null = null;
+  private vaultAdapter: ObsidianVaultFileAdapter | null = null;
+  private currentPreview: Extract<
+    WorkflowPreviewResult,
+    { kind: "preview" }
+  > | null = null;
+  private readonly openModals = new Set<{ close(): void }>();
   private readonly readingRoots = new Map<HTMLElement, ReadingRootState>();
+
+  get activePreview(): Extract<
+    WorkflowPreviewResult,
+    { kind: "preview" }
+  > | null {
+    return this.currentPreview;
+  }
 
   async onload(): Promise<void> {
     await this.loadSettings();
+    this.vaultAdapter = new ObsidianVaultFileAdapter(this.app.vault);
     this.addSettingTab(new HeadingNumberingSettingTab(this.app, this));
     this.registerEditorExtension(
       createHeadingNumberingExtension(() => this.settings),
@@ -259,17 +308,23 @@ export class HeadingNumberingPlugin extends Plugin {
     this.addCommand({
       id: commandIds.preview,
       name: translate(this.currentLocale(), "commands.preview"),
-      callback: () => this.showNotice("notices.preview"),
+      callback: () => {
+        void this.previewPersisted("add");
+      },
     });
     this.addCommand({
       id: commandIds.apply,
       name: translate(this.currentLocale(), "commands.apply"),
-      callback: () => this.showNotice("notices.apply"),
+      callback: () => {
+        void this.applyCurrentPreview();
+      },
     });
     this.addCommand({
       id: commandIds.remove,
       name: translate(this.currentLocale(), "commands.remove"),
-      callback: () => this.showNotice("notices.remove"),
+      callback: () => {
+        void this.previewPersisted("remove");
+      },
     });
     this.addCommand({
       id: commandIds.refresh,
@@ -282,13 +337,35 @@ export class HeadingNumberingPlugin extends Plugin {
     this.addCommand({
       id: commandIds.openSettings,
       name: translate(this.currentLocale(), "commands.openSettings"),
-      callback: () => this.showNotice("notices.openSettings"),
+      callback: () => this.openSettings(),
     });
+    this.registerEvent(
+      this.app.workspace.on("file-open", () =>
+        this.invalidatePersistedPreview(),
+      ),
+    );
+    this.registerEvent(
+      this.app.vault.on("modify", () => this.invalidatePersistedPreview()),
+    );
+    this.registerEvent(
+      this.app.vault.on("rename", () => this.invalidatePersistedPreview()),
+    );
+    this.registerEvent(
+      this.app.vault.on("delete", () => this.invalidatePersistedPreview()),
+    );
+    if ((this.dataStore?.recoveryOperations().length ?? 0) > 0) {
+      this.showNotice("notices.recoveryAvailable");
+    }
   }
 
   onunload(): void {
     this.disposed = true;
     this.renderGeneration += 1;
+    this.lifecycleGeneration += 1;
+    this.previewGeneration += 1;
+    this.currentPreview = null;
+    for (const modal of this.openModals) modal.close();
+    this.openModals.clear();
     for (const root of this.readingRoots.keys()) {
       disposeReadingRoot(root);
     }
@@ -296,18 +373,14 @@ export class HeadingNumberingPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    const saved = await this.loadData();
-    if (saved === null || saved === undefined) {
-      this.settingsErrors = [];
-      return;
-    }
-    const validation = validateStoredSettings(saved);
-    if (validation.ok) {
-      this.settings = validation.value;
-      this.settingsErrors = [];
-      return;
-    }
-    this.settingsErrors = validation.errors;
+    this.dataStore = new PluginDataStore(
+      () => this.loadData(),
+      (value) => this.saveData(value),
+      sha256Text,
+    );
+    const loaded = await this.dataStore.initialize();
+    this.settings = loaded.settings;
+    this.settingsErrors = [...loaded.settingsErrors];
   }
 
   async saveSettings(next: unknown): Promise<boolean> {
@@ -316,17 +389,251 @@ export class HeadingNumberingPlugin extends Plugin {
       this.settingsErrors = validation.errors;
       return false;
     }
+    this.invalidatePersistedPreview();
     this.settings = validation.value;
     this.settingsErrors = [];
-    await this.saveData(this.settings);
+    if (!this.dataStore) {
+      this.dataStore = new PluginDataStore(
+        () => this.loadData(),
+        (value) => this.saveData(value),
+        sha256Text,
+      );
+      await this.dataStore.initialize();
+    }
+    const saved = await this.dataStore.saveSettings(this.settings);
+    if (!saved.ok) {
+      this.settingsErrors = [...saved.errors];
+      return false;
+    }
     await this.refreshVirtualRendering();
     return true;
+  }
+
+  async previewPersisted(kind: WorkflowPreviewKind): Promise<void> {
+    if (this.settings.mode !== "persisted") {
+      this.showNotice("notices.persistedModeRequired");
+      return;
+    }
+    const active = this.app.workspace.getActiveFile();
+    if (!(active instanceof TFile) || active.extension !== "md") {
+      this.showNotice("notices.activeMarkdownRequired");
+      return;
+    }
+    const generation = ++this.previewGeneration;
+    this.currentPreview = null;
+    this.previewWasInvalidated = false;
+    try {
+      const files = this.app.vault
+        .getMarkdownFiles()
+        .slice()
+        .sort((left, right) =>
+          left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+        );
+      const sources = await Promise.all(
+        files.map(async (file) => ({
+          path: file.path,
+          text: await this.app.vault.read(file),
+        })),
+      );
+      if (!this.isPreviewRequestCurrent(generation, active.path)) return;
+      const result = await buildWorkflowPreview(
+        {
+          kind,
+          targetPath: active.path,
+          sources,
+          settings: this.settings,
+          resolveTarget: createObsidianLinkResolver(this.app.metadataCache),
+        },
+        {
+          createId: createOperationId,
+          now: () => new Date().toISOString(),
+          hashText: sha256Text,
+        },
+      );
+      if (!this.isPreviewRequestCurrent(generation, active.path)) return;
+      if (result.kind === "no-op") {
+        this.showNotice("notices.previewNoChanges");
+        return;
+      }
+      this.currentPreview = result;
+      const modal = new PersistedPreviewModal(
+        this.app,
+        result,
+        this.currentLocale(),
+        () => {
+          if (this.currentPreview === result && !this.disposed) {
+            void this.applyExactPreview(result);
+          }
+        },
+      );
+      this.openModals.add(modal);
+      modal.open();
+      this.showNotice("notices.previewReady");
+    } catch {
+      if (this.isPreviewRequestCurrent(generation, active.path)) {
+        this.showNotice("notices.operationError");
+      }
+    }
+  }
+
+  async applyCurrentPreview(): Promise<void> {
+    if (this.settings.mode !== "persisted") {
+      this.showNotice("notices.persistedModeRequired");
+      return;
+    }
+    const preview = this.currentPreview;
+    if (!preview) {
+      this.showNotice(
+        this.previewWasInvalidated
+          ? "notices.previewInvalidated"
+          : "notices.previewRequired",
+      );
+      return;
+    }
+    await this.applyExactPreview(preview);
+  }
+
+  openSettings(): void {
+    const candidate = (this.app as App & { readonly setting?: unknown })
+      .setting;
+    if (!isSettingsManager(candidate)) {
+      this.showNotice("notices.openSettings");
+      return;
+    }
+    try {
+      candidate.open();
+      candidate.openTabById(this.manifest.id);
+    } catch {
+      this.showNotice("notices.openSettings");
+    }
+  }
+
+  async openRecoveryCenter(): Promise<void> {
+    const operation = this.dataStore?.recoveryOperations().at(-1);
+    const vault = this.vaultAdapter;
+    const journal = this.dataStore?.journal;
+    if (!operation || !vault || !journal) {
+      this.showNotice("notices.recoveryNone");
+      return;
+    }
+    const generation = this.lifecycleGeneration;
+    await this.openRecoveryOperation(operation, generation, {
+      vault,
+      journal,
+      hashText: sha256Text,
+    });
+  }
+
+  private async openRecoveryOperation(
+    operation: import("./persistence/types.js").PersistedOperation,
+    generation: number,
+    dependencies: import("./persistence/types.js").PersistenceDependencies,
+  ): Promise<void> {
+    const inspection = await inspectRecovery(operation, dependencies);
+    if (this.disposed || generation !== this.lifecycleGeneration) return;
+    let modal: RecoveryCenterModal;
+    modal = new RecoveryCenterModal(
+      this.app,
+      inspection.files,
+      this.currentLocale(),
+      () => {
+        if (this.disposed || generation !== this.lifecycleGeneration) return;
+        modal.close();
+        void this.restoreAndRefresh(operation, generation, dependencies);
+      },
+    );
+    this.openModals.add(modal);
+    modal.open();
+  }
+
+  private async restoreAndRefresh(
+    operation: import("./persistence/types.js").PersistedOperation,
+    generation: number,
+    dependencies: import("./persistence/types.js").PersistenceDependencies,
+  ): Promise<void> {
+    try {
+      const result = await restoreEligibleFiles(operation, dependencies);
+      if (this.disposed || generation !== this.lifecycleGeneration) return;
+      this.showNotice(
+        result.kind === "restored"
+          ? "notices.restoreCompleted"
+          : "notices.applyRecovery",
+      );
+      await this.openRecoveryOperation(
+        result.operation,
+        generation,
+        dependencies,
+      );
+    } catch {
+      if (!this.disposed && generation === this.lifecycleGeneration) {
+        this.showNotice("notices.operationError");
+      }
+    }
   }
 
   currentLocale(): Locale {
     const systemLocale =
       typeof navigator === "undefined" ? "en" : navigator.language;
     return resolveLocale(this.settings.locale, systemLocale);
+  }
+
+  private async applyExactPreview(
+    preview: Extract<WorkflowPreviewResult, { kind: "preview" }>,
+  ): Promise<void> {
+    const active = this.app.workspace.getActiveFile();
+    if (
+      this.disposed ||
+      this.settings.mode !== "persisted" ||
+      this.currentPreview !== preview ||
+      !(active instanceof TFile) ||
+      active.path !== preview.targetPath ||
+      !this.vaultAdapter ||
+      !this.dataStore
+    ) {
+      this.invalidatePersistedPreview();
+      this.showNotice("notices.previewInvalidated");
+      return;
+    }
+    const result = await executePersistedOperation(preview.operation, {
+      vault: this.vaultAdapter,
+      journal: this.dataStore.journal,
+      hashText: sha256Text,
+    });
+    if (this.disposed) return;
+    this.currentPreview = null;
+    this.previewGeneration += 1;
+    if (result.kind === "completed") {
+      this.previewWasInvalidated = false;
+      await this.refreshVirtualRendering();
+      if (!this.disposed) this.showNotice("notices.applyCompleted");
+    } else if (result.kind === "stale-plan") {
+      this.previewWasInvalidated = true;
+      this.showNotice("notices.applyStale");
+    } else if (result.kind === "recovery-required") {
+      this.previewWasInvalidated = true;
+      this.showNotice("notices.applyRecovery");
+    } else {
+      this.previewWasInvalidated = true;
+      this.showNotice("notices.operationError");
+    }
+  }
+
+  private invalidatePersistedPreview(): void {
+    if (this.currentPreview) this.previewWasInvalidated = true;
+    this.currentPreview = null;
+    this.previewGeneration += 1;
+  }
+
+  private isPreviewRequestCurrent(
+    generation: number,
+    targetPath: string,
+  ): boolean {
+    return (
+      !this.disposed &&
+      generation === this.previewGeneration &&
+      this.settings.mode === "persisted" &&
+      this.app.workspace.getActiveFile()?.path === targetPath
+    );
   }
 
   private async decorateReadingRoot(
@@ -495,14 +802,53 @@ export class HeadingNumberingPlugin extends Plugin {
 
   private showNotice(
     key:
-      | "notices.preview"
-      | "notices.apply"
-      | "notices.remove"
       | "notices.refresh"
-      | "notices.openSettings",
+      | "notices.openSettings"
+      | "notices.persistedModeRequired"
+      | "notices.activeMarkdownRequired"
+      | "notices.previewReady"
+      | "notices.previewNoChanges"
+      | "notices.previewRequired"
+      | "notices.previewInvalidated"
+      | "notices.applyCompleted"
+      | "notices.applyStale"
+      | "notices.applyRecovery"
+      | "notices.operationError"
+      | "notices.recoveryAvailable"
+      | "notices.recoveryNone"
+      | "notices.restoreCompleted",
   ): void {
     new Notice(translate(this.currentLocale(), key));
   }
+}
+
+interface SettingsManagerCapability {
+  open(): unknown;
+  openTabById(id: string): unknown;
+}
+
+function isSettingsManager(value: unknown): value is SettingsManagerCapability {
+  if (typeof value !== "object" || value === null) return false;
+  try {
+    const candidate = value as Partial<SettingsManagerCapability>;
+    return (
+      typeof candidate.open === "function" &&
+      typeof candidate.openTabById === "function"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function createOperationId(): string {
+  if (typeof globalThis.crypto.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
 }
 
 export default HeadingNumberingPlugin;

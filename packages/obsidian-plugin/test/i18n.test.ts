@@ -13,5 +13,9 @@ describe("plugin translations", () => {
     expect(translate("en", "locale.auto")).toBe("Auto");
     expect(translate("en", "locale.en")).toBe("English");
     expect(translate("zh", "locale.zh")).toBe("中文");
+    expect(translate("en", "notices.refresh")).toBe(
+      "Virtual numbering refreshed.",
+    );
+    expect(translate("zh", "notices.refresh")).toBe("虚拟编号已刷新。");
   });
 });

@@ -12,10 +12,12 @@ describe("production bundle surface", () => {
     );
     const obsidian = {
       MarkdownRenderChild: class {},
+      Modal: class {},
       Notice: class {},
       Plugin,
       PluginSettingTab: class {},
       Setting: class {},
+      TFile: class {},
     };
 
     runInNewContext(bundle, {
