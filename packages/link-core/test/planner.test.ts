@@ -493,4 +493,34 @@ describe("planRenameScopedLinkChanges", () => {
       "target-missing",
     ]);
   });
+
+  it("keeps malformed fragments only when their resolved target is renamed", () => {
+    const changes = planRenameScopedLinkChanges({
+      sourcePath: "Refs.md",
+      markdown: [
+        "[[Target#Bad%GG]]",
+        "[[Other#Bad%GG]]",
+        "[[External#Old]]",
+        "[[Invalid#Old]]",
+      ].join(" "),
+      renames: [
+        {
+          targetPath: "Target.md",
+          oldHeading: "Old",
+          newHeading: "1. Old",
+        },
+      ],
+      resolveTarget: (_sourcePath, linkPath) => {
+        if (linkPath === "Target") return { kind: "file", path: "Target.md" };
+        if (linkPath === "Other") return { kind: "file", path: "Other.md" };
+        if (linkPath === "External") return { kind: "external" };
+        return { kind: "file", path: "../Target.md" };
+      },
+    });
+
+    expect(changes.edits).toEqual([]);
+    expect(changes.diagnostics.map(({ code }) => code)).toEqual([
+      "malformed-percent-encoding",
+    ]);
+  });
 });

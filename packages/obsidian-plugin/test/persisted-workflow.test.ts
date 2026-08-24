@@ -226,6 +226,66 @@ describe("buildWorkflowPreview", () => {
     ]);
   });
 
+  it.each([
+    ["add", "## Alpha", "[[Target#Alpha]]", "[[Target#1. Alpha]]"],
+    ["remove", "## 1. Alpha", "[[Target#1. Alpha]]", "[[Target#Alpha]]"],
+  ] as const)(
+    "keeps only related malformed diagnostics for %s without changing operation files or edit order",
+    async (kind, targetText, editableLink, expectedReplacement) => {
+      const result = await buildWorkflowPreview(
+        {
+          kind,
+          targetPath: "Target.md",
+          sources: [
+            { path: "Target.md", text: targetText },
+            {
+              path: "Links.md",
+              text: [
+                editableLink,
+                "[[Target#Bad%GG]]",
+                "[[Other#Bad%GG]]",
+                "[[External#Alpha]]",
+                "[[Invalid#Alpha]]",
+              ].join(" "),
+            },
+          ],
+          settings,
+          resolveTarget: (_source, linkPath) => {
+            if (linkPath === "Target")
+              return { kind: "file", path: "Target.md" };
+            if (linkPath === "Other") return { kind: "file", path: "Other.md" };
+            if (linkPath === "External") return { kind: "external" };
+            return { kind: "file", path: "../Target.md" };
+          },
+        },
+        deps,
+      );
+
+      expect(result.kind).toBe("preview");
+      if (result.kind !== "preview") return;
+      expect(
+        result.operation.files.map(({ path, role }) => ({ path, role })),
+      ).toEqual([
+        { path: "Target.md", role: "target" },
+        { path: "Links.md", role: "link-source" },
+      ]);
+      expect(result.groups.linkSources).toEqual([
+        {
+          path: "Links.md",
+          edits: [
+            expect.objectContaining({
+              expectedText: editableLink,
+              replacementText: expectedReplacement,
+            }),
+          ],
+        },
+      ]);
+      expect(result.groups.preserved).toEqual([
+        { path: "Links.md", code: "malformed-percent-encoding" },
+      ]);
+    },
+  );
+
   it("removes only the exact current prefix while preserving closing syntax and CRLF", async () => {
     const result = await buildWorkflowPreview(
       {

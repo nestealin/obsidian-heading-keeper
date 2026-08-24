@@ -106,7 +106,7 @@ function normalizedRenameTargets(
   return targets;
 }
 
-function appendTargetDiagnostic(
+function appendRenameCandidateDiagnostic(
   diagnostics: LinkDiagnostic[],
   token: LinkToken,
   target: ResolvedTarget,
@@ -128,24 +128,10 @@ function appendTargetDiagnostic(
     return null;
   }
   if (target.kind === "external") {
-    diagnostics.push(
-      diagnostic(
-        token,
-        "target-external",
-        "Resolver classified the target as external.",
-      ),
-    );
     return null;
   }
   const targetPath = normalizeTargetPath(target.path);
   if (targetPath === null) {
-    diagnostics.push(
-      diagnostic(
-        token,
-        "target-path-invalid",
-        "Resolver returned a path outside the vault-relative identity domain.",
-      ),
-    );
     return null;
   }
   return targetPath;
@@ -310,7 +296,25 @@ export function planRenameScopedLinkChanges({
     if (isExternalLinkPath(token.linkPath)) continue;
 
     const fragment = normalizeHeadingFragment(token.rawFragment);
-    if (!fragment.ok) continue;
+    if (!fragment.ok) {
+      let target: ResolvedTarget;
+      try {
+        target = resolveTarget(sourcePath, token.linkPath);
+      } catch {
+        continue;
+      }
+      if (target.kind !== "file") continue;
+      const targetPath = normalizeTargetPath(target.path);
+      if (targetPath === null || !renameTargets.has(targetPath)) continue;
+      diagnostics.push(
+        diagnostic(
+          token,
+          fragment.code,
+          "Heading fragment contains malformed percent encoding.",
+        ),
+      );
+      continue;
+    }
 
     if (fragment.value.startsWith("^")) {
       let target: ResolvedTarget;
@@ -348,7 +352,11 @@ export function planRenameScopedLinkChanges({
       );
       continue;
     }
-    const targetPath = appendTargetDiagnostic(diagnostics, token, target);
+    const targetPath = appendRenameCandidateDiagnostic(
+      diagnostics,
+      token,
+      target,
+    );
     if (targetPath === null) continue;
 
     const matches = renameMap.get(`${targetPath}\u0000${fragment.value}`);
