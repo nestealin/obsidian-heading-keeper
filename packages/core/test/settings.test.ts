@@ -70,6 +70,57 @@ describe("validateSettings", () => {
     }
   });
 
+  it("rejects inherited settings fields instead of reading a prototype", () => {
+    const inheritedSettings = Object.create(validSettings);
+
+    const result = validateSettings(inheritedSettings);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.map((error) => error.field)).toEqual([
+        "topLevel",
+        "bottomLevel",
+        "startAt",
+        "numberSeparator",
+        "titleSeparator",
+        "gapStrategy",
+      ]);
+    }
+  });
+
+  it("returns a field error for a throwing accessor without invoking it", () => {
+    const input = { ...validSettings };
+    let getterCalls = 0;
+    Object.defineProperty(input, "topLevel", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("untrusted getter");
+      },
+    });
+
+    expect(() => validateSettings(input)).not.toThrow();
+    expectInvalid(input, "topLevel");
+    expect(getterCalls).toBe(0);
+  });
+
+  it("returns a field error when a proxy rejects descriptor reads", () => {
+    const input = new Proxy(
+      { ...validSettings },
+      {
+        getOwnPropertyDescriptor(target, property) {
+          if (property === "titleSeparator") {
+            throw new Error("untrusted descriptor trap");
+          }
+          return Reflect.getOwnPropertyDescriptor(target, property);
+        },
+      },
+    );
+
+    expect(() => validateSettings(input)).not.toThrow();
+    expectInvalid(input, "titleSeparator");
+  });
+
   it("rejects topLevel outside the H1 through H6 range", () => {
     expectInvalid({ ...validSettings, topLevel: 0 }, "topLevel");
     expectInvalid({ ...validSettings, topLevel: 7 }, "topLevel");
@@ -81,8 +132,14 @@ describe("validateSettings", () => {
   });
 
   it("rejects a level range whose top is below its bottom", () => {
-    expectInvalid({ ...validSettings, topLevel: 5, bottomLevel: 3 }, "topLevel");
-    expectInvalid({ ...validSettings, topLevel: 5, bottomLevel: 3 }, "bottomLevel");
+    expectInvalid(
+      { ...validSettings, topLevel: 5, bottomLevel: 3 },
+      "topLevel",
+    );
+    expectInvalid(
+      { ...validSettings, topLevel: 5, bottomLevel: 3 },
+      "bottomLevel",
+    );
   });
 
   it("rejects a startAt value that is not a non-negative integer", () => {
@@ -91,20 +148,39 @@ describe("validateSettings", () => {
     expectInvalid({ ...validSettings, startAt: "1" }, "startAt");
   });
 
-  it("rejects non-string and multiline number separators", () => {
+  it("rejects empty, non-string, and multiline number separators", () => {
+    expectInvalid({ ...validSettings, numberSeparator: "" }, "numberSeparator");
     expectInvalid({ ...validSettings, numberSeparator: 1 }, "numberSeparator");
-    expectInvalid({ ...validSettings, numberSeparator: ".\n" }, "numberSeparator");
-    expectInvalid({ ...validSettings, numberSeparator: ".\r" }, "numberSeparator");
+    expectInvalid(
+      { ...validSettings, numberSeparator: ".\n" },
+      "numberSeparator",
+    );
+    expectInvalid(
+      { ...validSettings, numberSeparator: ".\r" },
+      "numberSeparator",
+    );
   });
 
-  it("rejects non-string and multiline title separators", () => {
+  it("rejects empty, non-string, and multiline title separators", () => {
+    expectInvalid({ ...validSettings, titleSeparator: "" }, "titleSeparator");
     expectInvalid({ ...validSettings, titleSeparator: 1 }, "titleSeparator");
-    expectInvalid({ ...validSettings, titleSeparator: ".\n" }, "titleSeparator");
-    expectInvalid({ ...validSettings, titleSeparator: ".\r" }, "titleSeparator");
+    expectInvalid(
+      { ...validSettings, titleSeparator: ".\n" },
+      "titleSeparator",
+    );
+    expectInvalid(
+      { ...validSettings, titleSeparator: ".\r" },
+      "titleSeparator",
+    );
   });
 
   it("accepts each supported gap strategy and rejects unsupported values", () => {
-    for (const gapStrategy of ["zero-fill", "one-fill", "compact", "skip"] as const) {
+    for (const gapStrategy of [
+      "zero-fill",
+      "one-fill",
+      "compact",
+      "skip",
+    ] as const) {
       expect(validateSettings({ ...validSettings, gapStrategy }).ok).toBe(true);
     }
     expectInvalid({ ...validSettings, gapStrategy: "preserve" }, "gapStrategy");

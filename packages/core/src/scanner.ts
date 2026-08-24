@@ -58,7 +58,8 @@ export function scanHeadings(markdown: string): HeadingNode[] {
       const closing = /^(.*?)([ \t]+#+[ \t]*)?$/u.exec(remainder);
       const rawText = closing?.[1] ?? remainder;
       const closingSequence = closing?.[2] ?? "";
-      const contentFrom = offset + indent.length + marker.length + spacing.length;
+      const contentFrom =
+        offset + indent.length + marker.length + spacing.length;
 
       headings.push({
         level: marker.length as HeadingLevel,

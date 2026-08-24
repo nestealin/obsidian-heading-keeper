@@ -48,47 +48,72 @@ describe("scanHeadings", () => {
     const markdown = "# One\r\n## Two";
 
     expect(scanHeadings(markdown)).toMatchObject([
-      { line: 0, semanticText: "One", sourceRange: { from: 0, to: 5 }, lineEnding: "\r\n" },
-      { line: 1, semanticText: "Two", sourceRange: { from: 7, to: 13 }, lineEnding: "" },
+      {
+        line: 0,
+        semanticText: "One",
+        sourceRange: { from: 0, to: 5 },
+        lineEnding: "\r\n",
+      },
+      {
+        line: 1,
+        semanticText: "Two",
+        sourceRange: { from: 7, to: 13 },
+        lineEnding: "",
+      },
     ]);
   });
 
   it("does not treat indented, H7, or inline hashes as headings", () => {
-    const markdown = ["    # code", "####### H7", "text # inline", "# kept"].join("\n");
+    const markdown = [
+      "    # code",
+      "####### H7",
+      "text # inline",
+      "# kept",
+    ].join("\n");
 
-    expect(scanHeadings(markdown).map((heading) => heading.semanticText)).toEqual([
-      "kept",
-    ]);
+    expect(
+      scanHeadings(markdown).map((heading) => heading.semanticText),
+    ).toEqual(["kept"]);
   });
 
   it("ignores tilde fences until a matching-length closing fence", () => {
-    const markdown = ["~~~~md", "# hidden", "~~~", "## still hidden", "~~~~~", "### shown"].join(
-      "\n",
-    );
+    const markdown = [
+      "~~~~md",
+      "# hidden",
+      "~~~",
+      "## still hidden",
+      "~~~~~",
+      "### shown",
+    ].join("\n");
 
-    expect(scanHeadings(markdown).map((heading) => heading.semanticText)).toEqual([
-      "shown",
-    ]);
+    expect(
+      scanHeadings(markdown).map((heading) => heading.semanticText),
+    ).toEqual(["shown"]);
   });
 
   it("does not open a backtick fence when its info string contains a backtick", () => {
     const markdown = ["```md`", "# visible", "```"].join("\n");
 
-    expect(scanHeadings(markdown).map((heading) => heading.semanticText)).toEqual([
-      "visible",
-    ]);
+    expect(
+      scanHeadings(markdown).map((heading) => heading.semanticText),
+    ).toEqual(["visible"]);
   });
 
   it("allows a tilde fence info string to contain a backtick", () => {
     const markdown = ["~~~md`", "# hidden", "~~~", "## shown"].join("\n");
 
-    expect(scanHeadings(markdown).map((heading) => heading.semanticText)).toEqual([
-      "shown",
-    ]);
+    expect(
+      scanHeadings(markdown).map((heading) => heading.semanticText),
+    ).toEqual(["shown"]);
   });
 
   it("keeps Unicode text, empty headings, and closing sequences distinct", () => {
-    const markdown = ["## 中文 🐙", "###", "#### trailing   ", "##### end #####"].join("\n");
+    const markdown = [
+      "## 中文 🐙",
+      "###",
+      "#### trailing   ",
+      "##### end #####",
+    ].join("\n");
 
     expect(
       scanHeadings(markdown).map(
