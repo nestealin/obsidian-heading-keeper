@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +15,10 @@ const crcTable = Uint32Array.from({ length: 256 }, (_, value) => {
   }
   return crc >>> 0;
 });
+
+function sha256(content) {
+  return createHash("sha256").update(content).digest("hex");
+}
 
 function crc32(content) {
   let crc = 0xffffffff;
@@ -104,11 +109,13 @@ async function packagePlugin() {
     writeUInt16(0),
   ]);
   await mkdir(dirname(artifact), { recursive: true });
-  await writeFile(
-    artifact,
-    Buffer.concat([...entries.map((entry) => entry.local), central, end]),
-  );
-  process.stdout.write(`${artifact}\n`);
+  const archive = Buffer.concat([
+    ...entries.map((entry) => entry.local),
+    central,
+    end,
+  ]);
+  await writeFile(artifact, archive);
+  process.stdout.write(`${artifact} sha256=${sha256(archive)}\n`);
 }
 
 await packagePlugin();

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = join(fileURLToPath(new URL("..", import.meta.url)));
 const pluginDirectory = join(repositoryRoot, "packages/obsidian-plugin");
 const assets = ["main.js", "manifest.json", "versions.json"];
+const allowedEntries = new Set([...assets, "data.json"]);
 const deploymentDirectory = process.argv[2];
 
 function fail(message) {
@@ -56,9 +57,10 @@ execFileSync(
 
 const deployedNames = await readdir(deployed);
 for (const name of deployedNames) {
-  if (name === "data.json" || assets.includes(name)) continue;
-  if (/\.(?:js|json|map)$/u.test(name))
-    fail(`Unexpected deployment asset: ${name}`);
+  if (!allowedEntries.has(name)) fail(`Unexpected deployment entry: ${name}`);
+  const entryStatus = await lstat(join(deployed, name));
+  if (!entryStatus.isFile())
+    fail(`Expected regular file: ${join(deployed, name)}`);
 }
 
 for (const name of assets) {

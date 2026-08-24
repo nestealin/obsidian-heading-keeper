@@ -12,6 +12,10 @@ const repositoryRoot = resolve(
 );
 const artifact = join(repositoryRoot, "artifacts/heading-numbering-0.1.0.zip");
 const packageScript = join(repositoryRoot, "scripts/package-plugin.mjs");
+const releaseRejectedScript = join(
+  repositoryRoot,
+  "scripts/verify-release-rejected.mjs",
+);
 const sensitiveScript = join(repositoryRoot, "scripts/scan-sensitive.mjs");
 const verifyDeploymentScript = join(
   repositoryRoot,
@@ -29,10 +33,15 @@ afterEach(async () => {
   );
 });
 
-function run(script: string, arguments_: string[] = []) {
+function run(
+  script: string,
+  arguments_: string[] = [],
+  environment: NodeJS.ProcessEnv = {},
+) {
   return spawnSync(process.execPath, [script, ...arguments_], {
     cwd: repositoryRoot,
     encoding: "utf8",
+    env: { ...process.env, ...environment },
   });
 }
 
@@ -112,12 +121,17 @@ async function deploymentDirectory(): Promise<string> {
 
 describe("release surface", () => {
   it("packages the three release assets into a byte-stable valid ZIP", async () => {
-    expect(run(packageScript).status).toBe(0);
+    const firstResult = run(packageScript);
+    expect(firstResult.status).toBe(0);
     const first = await readFile(artifact);
-    expect(run(packageScript).status).toBe(0);
+    expect(firstResult.stdout).toContain(`sha256=${sha256(first)}`);
+
+    const secondResult = run(packageScript);
+    expect(secondResult.status).toBe(0);
     const second = await readFile(artifact);
 
     expect(sha256(first)).toBe(sha256(second));
+    expect(secondResult.stdout).toContain(`sha256=${sha256(second)}`);
     const entries = parseZipEntries(first);
     expect(entries.map((entry) => entry.name)).toEqual([
       "main.js",
@@ -130,6 +144,17 @@ describe("release surface", () => {
     );
     expect(run(wordJoinerScript).status).toBe(0);
     expect(run(sensitiveScript).status).toBe(0);
+  });
+
+  it("runs caller-supplied rejected-term checks and explicitly skips when absent", () => {
+    const absent = run(releaseRejectedScript);
+    expect(absent.status).toBe(0);
+    expect(absent.stdout).toContain("skipped");
+
+    const detected = run(releaseRejectedScript, [], {
+      REJECTED_TERMS_JSON: JSON.stringify(["heading-numbering"]),
+    });
+    expect(detected.status).toBe(1);
   });
 
   it("keeps the bundled release identity and runtime surface constrained", () => {
@@ -203,7 +228,7 @@ describe("release surface", () => {
     expect(result.stdout).toContain("versions.json sha256=");
   });
 
-  it("rejects incomplete, non-file, and extra code deployment assets", async () => {
+  it("rejects incomplete, non-file, and every non-allowlisted deployment entry", async () => {
     execFileSync(
       "corepack",
       ["pnpm", "--filter", "@heading-numbering/obsidian-plugin", "build"],
@@ -220,9 +245,22 @@ describe("release surface", () => {
     await mkdir(join(nonFile, "main.js"));
     expect(run(verifyDeploymentScript, [nonFile]).status).toBe(1);
 
-    const extra = await deploymentDirectory();
-    await writeFile(join(extra, "main.js.map"), "{}");
-    expect(run(verifyDeploymentScript, [extra]).status).toBe(1);
+    const unexpectedFiles: ReadonlyArray<readonly [string, string]> = [
+      ["styles.css", "body {}"],
+      ["unexpected.txt", "unexpected"],
+      ["main.js.map", "{}"],
+    ];
+    for (const [name, content] of unexpectedFiles) {
+      const extra = await deploymentDirectory();
+      await writeFile(join(extra, name), content);
+      expect(run(verifyDeploymentScript, [extra]).status).toBe(1);
+    }
+
+    for (const name of ["nested", "data.json"]) {
+      const extraDirectory = await deploymentDirectory();
+      await mkdir(join(extraDirectory, name));
+      expect(run(verifyDeploymentScript, [extraDirectory]).status).toBe(1);
+    }
   });
 
   it("rejects nonexistent and non-directory deployment paths", async () => {
