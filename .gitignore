@@ -1,0 +1,8 @@
+.DS_Store
+.superpowers/
+.worktrees/
+artifacts/
+node_modules/
+packages/*/dist/
+packages/obsidian-plugin/main.js
+packages/obsidian-plugin/main.js.map
