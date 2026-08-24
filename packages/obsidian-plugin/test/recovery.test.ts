@@ -91,7 +91,7 @@ function recoveryOperation(
         role: "link-source",
       },
       {
-        path: "pending.md",
+        path: "zz-pending.md",
         beforeHash: "hash:before pending",
         beforeText: "before pending",
         afterHash: "hash:after pending",
@@ -133,7 +133,7 @@ describe("conservative recovery", () => {
       "Target.md": "after target",
       "a.md": "before a",
       "z.md": "external z",
-      "pending.md": "before pending",
+      "zz-pending.md": "before pending",
     });
     const result = await inspectRecovery(recoveryOperation(), {
       vault: state.vault,
@@ -144,7 +144,7 @@ describe("conservative recovery", () => {
       ["Target.md", "eligible"],
       ["a.md", "restored"],
       ["z.md", "changed"],
-      ["pending.md", "pending"],
+      ["zz-pending.md", "pending"],
     ]);
     expect(result.diagnostics).toEqual([]);
   });
@@ -171,7 +171,7 @@ describe("conservative recovery", () => {
       "Target.md": "after target",
       "a.md": "external a",
       "z.md": "after z",
-      "pending.md": "before pending",
+      "zz-pending.md": "before pending",
     });
     const result = await restoreEligibleFiles(recoveryOperation(), {
       vault: state.vault,
@@ -239,7 +239,7 @@ describe("conservative recovery", () => {
       "Target.md": "after target",
       "a.md": "before a",
       "z.md": "before z",
-      "pending.md": "before pending",
+      "zz-pending.md": "before pending",
     });
     state.journal.save = async () => {
       throw new Error("private journal text");
@@ -263,7 +263,7 @@ describe("conservative recovery", () => {
       "Target.md": "after target",
       "a.md": "before a",
       "z.md": "after z",
-      "pending.md": "before pending",
+      "zz-pending.md": "before pending",
     });
     state.vault.write = async (path) => {
       state.writes.push(path);
@@ -281,4 +281,161 @@ describe("conservative recovery", () => {
     expect(state.writes).toEqual(["z.md"]);
     expect(JSON.stringify(result)).not.toContain("private restore text");
   });
+
+  it("rechecks an eligible image after the restoring journal and preserves a concurrent change", async () => {
+    const op = {
+      ...recoveryOperation(),
+      files: recoveryOperation().files.slice(0, 1),
+      completedPaths: ["Target.md"],
+    };
+    const state = recoveryAdapters({ "Target.md": "after target" });
+    state.journal.save = async (saved) => {
+      state.saves.push(saved);
+      if (saved.state === "restoring")
+        state.content.set("Target.md", "changed after journal");
+    };
+    const result = await restoreEligibleFiles(op, {
+      vault: state.vault,
+      journal: state.journal,
+      hashText,
+    });
+    expect(state.writes).toEqual([]);
+    expect(state.content.get("Target.md")).toBe("changed after journal");
+    expect(result).toMatchObject({
+      kind: "recovery-required",
+      code: "recovery-conflict",
+    });
+  });
+
+  it("rechecks every file immediately before reverse writes and continues around conflicts", async () => {
+    const op = {
+      ...recoveryOperation(),
+      files: recoveryOperation().files.slice(0, 3),
+      completedPaths: ["Target.md", "a.md", "z.md"],
+    };
+    const state = recoveryAdapters({
+      "Target.md": "after target",
+      "a.md": "after a",
+      "z.md": "after z",
+    });
+    const baseWrite = state.vault.write.bind(state.vault);
+    state.vault.write = async (path, text) => {
+      await baseWrite(path, text);
+      if (path === "z.md")
+        state.content.set("a.md", "changed between reverse writes");
+    };
+    const result = await restoreEligibleFiles(op, {
+      vault: state.vault,
+      journal: state.journal,
+      hashText,
+    });
+    expect(state.writes).toEqual(["z.md", "Target.md"]);
+    expect(state.content.get("a.md")).toBe("changed between reverse writes");
+    expect(result).toMatchObject({
+      kind: "recovery-required",
+      code: "recovery-conflict",
+    });
+  });
+
+  it.each(["read", "hash"])(
+    "preserves an eligible file when its pre-write %s throws",
+    async (failure) => {
+      const op = {
+        ...recoveryOperation(),
+        files: recoveryOperation().files.slice(0, 1),
+        completedPaths: ["Target.md"],
+      };
+      const state = recoveryAdapters({ "Target.md": "after target" });
+      let reads = 0;
+      let hashes = 0;
+      const baseRead = state.vault.read.bind(state.vault);
+      state.vault.read = async (path) => {
+        reads += 1;
+        if (failure === "read" && reads === 2)
+          throw new Error("private prewrite read");
+        return baseRead(path);
+      };
+      const checkedHash = async (text: string) => {
+        hashes += 1;
+        if (failure === "hash" && hashes === 4)
+          throw new Error("private prewrite hash");
+        return hashText(text);
+      };
+      const result = await restoreEligibleFiles(op, {
+        vault: state.vault,
+        journal: state.journal,
+        hashText: checkedHash,
+      });
+      expect(state.writes).toEqual([]);
+      expect(state.content.get("Target.md")).toBe("after target");
+      expect(result.kind).toBe("recovery-required");
+      expect(JSON.stringify(result)).not.toContain("private prewrite");
+    },
+  );
+
+  it("records a pre-write conflict even when a later inspection sees a safe before-image", async () => {
+    const op = {
+      ...recoveryOperation(),
+      files: recoveryOperation().files.slice(0, 1),
+      completedPaths: ["Target.md"],
+    };
+    const state = recoveryAdapters({ "Target.md": "after target" });
+    let reads = 0;
+    state.vault.read = async () => {
+      reads += 1;
+      if (reads === 1) return "after target";
+      if (reads === 2) throw new Error("private transient read");
+      return "before target";
+    };
+    const result = await restoreEligibleFiles(op, {
+      vault: state.vault,
+      journal: state.journal,
+      hashText,
+    });
+    expect(state.writes).toEqual([]);
+    expect(result).toMatchObject({
+      kind: "recovery-required",
+      code: "recovery-conflict",
+    });
+  });
+
+  it.each([
+    ["preview state", () => recoveryOperation("previewed")],
+    [
+      "duplicate paths",
+      () => {
+        const value = recoveryOperation();
+        return {
+          ...value,
+          files: [
+            value.files[0]!,
+            { ...value.files[1]!, path: "Target.md" },
+            ...value.files.slice(2),
+          ],
+        };
+      },
+    ],
+  ])(
+    "rejects invalid restore operations before journal or Vault access: %s",
+    async (_label, makeInvalid) => {
+      const state = recoveryAdapters({});
+      let loads = 0;
+      state.journal.load = async () => {
+        loads += 1;
+        return null;
+      };
+      const result = await restoreEligibleFiles(makeInvalid(), {
+        vault: state.vault,
+        journal: state.journal,
+        hashText,
+      });
+      expect(result).toMatchObject({
+        kind: "recovery-required",
+        code: "operation-invalid",
+      });
+      expect(loads).toBe(0);
+      expect(state.writes).toEqual([]);
+      expect(state.saves).toEqual([]);
+    },
+  );
 });

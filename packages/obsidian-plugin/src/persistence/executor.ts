@@ -6,6 +6,31 @@ import type {
   RestoreResult,
 } from "./types.js";
 import { snapshotOperation } from "./journal.js";
+import {
+  sameOperationIdentity,
+  validatePersistedOperation,
+} from "./operation-validator.js";
+
+function safeSnapshotOperation(
+  operation: PersistedOperation,
+): PersistedOperation {
+  try {
+    return snapshotOperation(operation);
+  } catch {
+    return operation;
+  }
+}
+
+function invalidExecutionResult(
+  operation: PersistedOperation,
+  code: "operation-invalid" | "operation-hash-error" | "operation-conflict",
+): ExecutionResult {
+  return {
+    kind: "recovery-required",
+    code,
+    operation: safeSnapshotOperation(operation),
+  };
+}
 
 async function exactImage(
   text: string,
@@ -41,32 +66,54 @@ export async function executePersistedOperation(
   operation: PersistedOperation,
   dependencies: PersistenceDependencies,
 ): Promise<ExecutionResult> {
-  if (operation.state === "completed") {
-    return { kind: "completed", operation: snapshotOperation(operation) };
+  const callerValidation = await validatePersistedOperation(
+    operation,
+    dependencies.hashText,
+    "execute-caller",
+  );
+  if (!callerValidation.ok) {
+    return invalidExecutionResult(operation, callerValidation.code);
   }
+  const caller = callerValidation.operation;
   let durable: PersistedOperation | null;
   try {
-    durable = await dependencies.journal.load(operation.id);
+    durable = await dependencies.journal.load(caller.id);
   } catch {
     return {
       kind: "journal-error",
       code: "journal-error",
-      operation: snapshotOperation(operation),
+      operation: caller,
     };
   }
-  if (durable?.state === "completed") {
-    return { kind: "completed", operation: snapshotOperation(durable) };
-  }
-  if (durable && durable.state !== "previewed") {
-    return {
-      kind: "recovery-required",
-      code: "operation-already-started",
-      operation: snapshotOperation(durable, "recovery-required"),
-    };
+  let executable = caller;
+  if (durable) {
+    const durableValidation = await validatePersistedOperation(
+      durable,
+      dependencies.hashText,
+      "durable",
+    );
+    if (!durableValidation.ok) {
+      return invalidExecutionResult(durable, durableValidation.code);
+    }
+    const durableSnapshot = durableValidation.operation;
+    if (!sameOperationIdentity(caller, durableSnapshot)) {
+      return invalidExecutionResult(durableSnapshot, "operation-conflict");
+    }
+    if (durableSnapshot.state === "completed") {
+      return { kind: "completed", operation: durableSnapshot };
+    }
+    if (durableSnapshot.state !== "previewed") {
+      return {
+        kind: "recovery-required",
+        code: "operation-already-started",
+        operation: durableSnapshot,
+      };
+    }
+    executable = durableSnapshot;
   }
 
   let preflightFailure: ExecutionResult | null = null;
-  for (const file of operation.files) {
+  for (const file of executable.files) {
     let current: string;
     try {
       current = await dependencies.vault.read(file.path);
@@ -83,7 +130,7 @@ export async function executePersistedOperation(
           kind: "stale-plan",
           code: "source-stale",
           path: file.path,
-          operation: snapshotOperation(operation),
+          operation: executable,
         };
       }
     } catch {
@@ -91,13 +138,13 @@ export async function executePersistedOperation(
         preflightFailure = {
           kind: "recovery-required",
           code: "source-read-error",
-          operation: snapshotOperation(operation, "recovery-required"),
+          operation: snapshotOperation(executable, "recovery-required"),
         };
     }
   }
   if (preflightFailure) return preflightFailure;
 
-  let currentOperation = snapshotOperation(operation, "applying", []);
+  let currentOperation = snapshotOperation(executable, "applying", []);
   try {
     await dependencies.journal.save(currentOperation);
   } catch {
@@ -224,19 +271,32 @@ export async function restoreEligibleFiles(
   operation: PersistedOperation,
   dependencies: PersistenceDependencies,
 ): Promise<RestoreResult> {
-  const initial = await inspectRecovery(operation, dependencies);
+  const validation = await validatePersistedOperation(
+    operation,
+    dependencies.hashText,
+    "restore",
+  );
+  if (!validation.ok) {
+    return {
+      kind: "recovery-required",
+      code: validation.code,
+      operation: safeSnapshotOperation(operation),
+    };
+  }
+  const recoverable = validation.operation;
+  const initial = await inspectRecovery(recoverable, dependencies);
   const eligible = new Set(
     initial.files
       .filter((file) => file.status === "eligible")
       .map((file) => file.path),
   );
-  const appliedPaths = new Set(operation.completedPaths);
+  const appliedPaths = new Set(recoverable.completedPaths);
   for (const path of eligible) appliedPaths.add(path);
 
   let currentOperation = snapshotOperation(
-    operation,
+    recoverable,
     "restoring",
-    operation.files
+    recoverable.files
       .map((file) => file.path)
       .filter((path) => appliedPaths.has(path)),
   );
@@ -253,9 +313,27 @@ export async function restoreEligibleFiles(
     }
   }
 
+  let sawPrewriteConflict = false;
   for (let index = currentOperation.files.length - 1; index >= 0; index -= 1) {
     const file = currentOperation.files[index]!;
     if (!eligible.has(file.path)) continue;
+    try {
+      const current = await dependencies.vault.read(file.path);
+      if (
+        !(await exactImage(
+          current,
+          file.afterText,
+          file.afterHash,
+          dependencies,
+        ))
+      ) {
+        sawPrewriteConflict = true;
+        continue;
+      }
+    } catch {
+      sawPrewriteConflict = true;
+      continue;
+    }
     try {
       await dependencies.vault.write(file.path, file.beforeText);
     } catch {
@@ -300,9 +378,11 @@ export async function restoreEligibleFiles(
   }
 
   const finalInspection = await inspectRecovery(currentOperation, dependencies);
-  const unsafe = finalInspection.files.some(
-    (file) => file.status === "changed" || file.status === "eligible",
-  );
+  const unsafe =
+    sawPrewriteConflict ||
+    finalInspection.files.some(
+      (file) => file.status === "changed" || file.status === "eligible",
+    );
   const finalOperation = snapshotOperation(
     currentOperation,
     unsafe ? "recovery-required" : "restored",

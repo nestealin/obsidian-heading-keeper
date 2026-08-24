@@ -238,18 +238,221 @@ describe("executePersistedOperation", () => {
     expect(state.content.get("a.md")).toBe("before a");
   });
 
-  it("is idempotent for completed operations without touching adapters", async () => {
+  it("is idempotent when the same preview identity already has a durable completed journal", async () => {
     const state = harness({});
-    const completed = {
+    const completed: PersistedOperation = {
       ...operation("completed"),
       completedPaths: ["Target.md", "a.md", "z.md"],
     };
-    const result = await executePersistedOperation(completed, {
+    state.journal.load = async () => completed;
+    const result = await executePersistedOperation(operation(), {
       vault: state.vault,
       journal: state.journal,
       hashText,
     });
     expect(result.kind).toBe("completed");
+    expect(state.events).toEqual([]);
+  });
+
+  it.each([
+    ["non-preview caller state", () => operation("completed")],
+    [
+      "duplicate paths",
+      () => {
+        const value = operation();
+        return {
+          ...value,
+          files: [
+            value.files[0]!,
+            { ...value.files[1]!, path: "Target.md" },
+            value.files[2]!,
+          ],
+        };
+      },
+    ],
+    [
+      "empty path",
+      () => {
+        const value = operation();
+        return {
+          ...value,
+          files: [{ ...value.files[0]!, path: "" }, ...value.files.slice(1)],
+        };
+      },
+    ],
+    [
+      "target after link",
+      () => {
+        const value = operation();
+        return {
+          ...value,
+          files: [value.files[1]!, value.files[0]!, value.files[2]!],
+        };
+      },
+    ],
+    [
+      "unsorted links",
+      () => {
+        const value = operation();
+        return {
+          ...value,
+          files: [value.files[0]!, value.files[2]!, value.files[1]!],
+        };
+      },
+    ],
+    [
+      "preview progress",
+      () => ({ ...operation(), completedPaths: ["Target.md"] }),
+    ],
+    [
+      "duplicate progress",
+      () => ({ ...operation(), completedPaths: ["Target.md", "Target.md"] }),
+    ],
+    [
+      "forged image hash",
+      () => {
+        const value = operation();
+        return {
+          ...value,
+          files: [
+            { ...value.files[0]!, afterHash: "forged" },
+            ...value.files.slice(1),
+          ],
+        };
+      },
+    ],
+    [
+      "no-op image",
+      () => {
+        const value = operation();
+        return {
+          ...value,
+          files: [
+            {
+              ...value.files[0]!,
+              afterText: "before target",
+              afterHash: "hash:before target",
+            },
+            ...value.files.slice(1),
+          ],
+        };
+      },
+    ],
+  ])(
+    "rejects invalid operation structure before journal or Vault access: %s",
+    async (_label, makeInvalid) => {
+      const state = harness({});
+      let loads = 0;
+      state.journal.load = async () => {
+        loads += 1;
+        return null;
+      };
+      const result = await executePersistedOperation(makeInvalid(), {
+        vault: state.vault,
+        journal: state.journal,
+        hashText,
+      });
+      expect(result).toMatchObject({
+        kind: "recovery-required",
+        code: "operation-invalid",
+      });
+      expect(loads).toBe(0);
+      expect(state.events).toEqual([]);
+    },
+  );
+
+  it("returns a stable journal-free result when operation hashing throws", async () => {
+    const state = harness({});
+    let loads = 0;
+    state.journal.load = async () => {
+      loads += 1;
+      return null;
+    };
+    const result = await executePersistedOperation(operation(), {
+      vault: state.vault,
+      journal: state.journal,
+      hashText: async () => {
+        throw new Error("private hash detail");
+      },
+    });
+    expect(result).toMatchObject({
+      kind: "recovery-required",
+      code: "operation-hash-error",
+    });
+    expect(JSON.stringify(result)).not.toContain("private hash detail");
+    expect(loads).toBe(0);
+    expect(state.events).toEqual([]);
+  });
+
+  it("does not throw when a runtime operation has a malformed shape", async () => {
+    const state = harness({});
+    const malformed = {
+      ...operation(),
+      files: undefined,
+    } as unknown as PersistedOperation;
+    const result = await executePersistedOperation(malformed, {
+      vault: state.vault,
+      journal: state.journal,
+      hashText,
+    });
+    expect(result).toMatchObject({
+      kind: "recovery-required",
+      code: "operation-invalid",
+    });
+    expect(state.events).toEqual([]);
+  });
+
+  it("recomputes every before and after hash before rejecting an image mismatch", async () => {
+    const state = harness({});
+    const original = operation();
+    const forged = {
+      ...original,
+      files: [
+        { ...original.files[0]!, afterHash: "forged" },
+        ...original.files.slice(1),
+      ],
+    };
+    let hashes = 0;
+    const result = await executePersistedOperation(forged, {
+      vault: state.vault,
+      journal: state.journal,
+      hashText: async (text) => {
+        hashes += 1;
+        return `hash:${text}`;
+      },
+    });
+    expect(result).toMatchObject({
+      kind: "recovery-required",
+      code: "operation-invalid",
+    });
+    expect(hashes).toBe(6);
+    expect(state.events).toEqual([]);
+  });
+
+  it("rejects a durable journal whose immutable identity differs from the preview caller", async () => {
+    const state = harness({});
+    const durable = operation("applying");
+    state.journal.load = async () => ({
+      ...durable,
+      files: [
+        {
+          ...durable.files[0]!,
+          afterText: "different",
+          afterHash: "hash:different",
+        },
+        ...durable.files.slice(1),
+      ],
+    });
+    const result = await executePersistedOperation(operation(), {
+      vault: state.vault,
+      journal: state.journal,
+      hashText,
+    });
+    expect(result).toMatchObject({
+      kind: "recovery-required",
+      code: "operation-conflict",
+    });
+    expect(result.operation.files[0]?.afterText).toBe("different");
     expect(state.events).toEqual([]);
   });
 });
