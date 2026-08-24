@@ -1,0 +1,9 @@
+{
+  "id": "heading-numbering",
+  "name": "Heading Numbering",
+  "version": "0.1.0",
+  "minAppVersion": "1.12.7",
+  "description": "Virtual heading numbering with explicit persisted operations.",
+  "author": "nestealin",
+  "isDesktopOnly": false
+}
