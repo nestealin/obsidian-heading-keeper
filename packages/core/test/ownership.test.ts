@@ -1,5 +1,45 @@
+import { Worker } from "node:worker_threads";
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { classifyOwnership, scanHeadings } from "../src/index.js";
+import {
+  buildNumberingPlan,
+  classifyOwnership,
+  DEFAULT_SETTINGS,
+  scanHeadings,
+} from "../src/index.js";
+import type { NumberingFormat, Ownership } from "../src/index.js";
+
+interface WorkerCase {
+  readonly title: string;
+  readonly expectedPrefix: string;
+  readonly format: Readonly<NumberingFormat>;
+}
+
+function classifyInWorker(
+  cases: readonly WorkerCase[],
+): Promise<readonly Ownership[]> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(
+      new URL("./ownership.worker.mjs", import.meta.url),
+      {
+        workerData: cases,
+      },
+    );
+    const timeout = setTimeout(() => {
+      void worker.terminate();
+      reject(new Error("ownership classification exceeded 500 ms"));
+    }, 500);
+
+    worker.once("message", (results: readonly Ownership[]) => {
+      clearTimeout(timeout);
+      resolve(results);
+    });
+    worker.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+  });
+}
 
 function heading(title: string) {
   const node = scanHeadings(`## ${title}\n`)[0];
@@ -10,6 +50,18 @@ function heading(title: string) {
 }
 
 describe("classifyOwnership", () => {
+  it("finishes for long repeated numeric separators with and without a title separator", async () => {
+    const repeatedDigits = "1".repeat(48);
+    const format = { numberSeparator: "1", titleSeparator: "x" };
+
+    await expect(
+      classifyInWorker([
+        { title: `${repeatedDigits}y`, expectedPrefix: "2", format },
+        { title: `${repeatedDigits}xTitle`, expectedPrefix: "2", format },
+      ]),
+    ).resolves.toEqual(["absent", "ambiguous"]);
+  });
+
   it("recognizes only a complete visible prefix equal to the computed prefix", () => {
     expect(classifyOwnership(heading("1.2. Managed"), "1.2")).toBe("exact");
     expect(classifyOwnership(heading("1.2.3. Managed"), "1.2")).toBe(
@@ -68,6 +120,50 @@ describe("classifyOwnership", () => {
 
   it("returns absent when the title does not start with a numeric candidate", () => {
     expect(classifyOwnership(heading("Overview"), "1")).toBe("absent");
+    expect(classifyOwnership(heading("3D Printing"), "1")).toBe("absent");
+  });
+
+  it("protects long numeric-leading titles containing generated numeric or punctuation separators", () => {
+    const separator = fc
+      .array(
+        fc.constantFrom("0", "1", "9", ".", "-", "_", ":", "+", "*", "?"),
+        {
+          minLength: 1,
+          maxLength: 12,
+        },
+      )
+      .map((parts) => parts.join(""));
+    const numericLead = fc
+      .array(fc.constantFrom("0", "1", "2", "7", "9"), {
+        minLength: 64,
+        maxLength: 512,
+      })
+      .map((parts) => parts.join(""));
+
+    fc.assert(
+      fc.property(
+        separator,
+        separator,
+        numericLead,
+        fc.constantFrom("Title", "candidate", "y"),
+        (numberSeparator, titleSeparator, digits, suffix) => {
+          const title = `${digits}${titleSeparator}${suffix}`;
+          const format = { numberSeparator, titleSeparator };
+          const ownership = classifyOwnership(heading(title), "2", format);
+          const plan = buildNumberingPlan(scanHeadings(`## ${title}\n`), {
+            ...DEFAULT_SETTINGS,
+            ...format,
+          });
+          const validOwnership = ["absent", "exact", "semantic", "ambiguous"];
+
+          expect(validOwnership).toContain(ownership);
+          expect(validOwnership).toContain(plan.entries[0]?.ownership);
+          expect(ownership).not.toBe("absent");
+          expect(plan.entries[0]?.ownership).not.toBe("absent");
+        },
+      ),
+      { numRuns: 1000 },
+    );
   });
 
   it.each([

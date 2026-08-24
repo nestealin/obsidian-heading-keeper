@@ -5,10 +5,6 @@ const DEFAULT_FORMAT: Readonly<NumberingFormat> = Object.freeze({
   titleSeparator: ". ",
 });
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-}
-
 function hasSemanticBoundary(
   text: string,
   candidate: string,
@@ -93,11 +89,9 @@ export function classifyOwnership(
     return "exact";
   }
 
-  const formattedCandidate = new RegExp(
-    `^\\d+(?:${escapeRegExp(format.numberSeparator)}\\d+)*${escapeRegExp(format.titleSeparator)}`,
-    "u",
-  );
-  if (formattedCandidate.test(text)) {
+  const firstCodeUnit = text.charCodeAt(0);
+  const startsWithAsciiDigit = firstCodeUnit >= 48 && firstCodeUnit <= 57;
+  if (startsWithAsciiDigit && text.indexOf(format.titleSeparator, 1) !== -1) {
     return "ambiguous";
   }
 
