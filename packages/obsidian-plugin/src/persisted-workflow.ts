@@ -45,7 +45,7 @@ export interface PreviewGroups {
   readonly targetEdits: readonly PlannedTextEdit[];
   readonly linkSources: readonly {
     readonly path: string;
-    readonly edits: number;
+    readonly edits: readonly PlannedTextEdit[];
   }[];
   readonly preserved: readonly PreviewPreservedItem[];
   readonly skips: readonly PreviewPreservedItem[];
@@ -62,6 +62,27 @@ export type WorkflowPreviewResult =
       readonly operation: PersistedOperation;
       readonly groups: PreviewGroups;
     };
+
+function stableSkipCode(
+  entry: NumberingPlanEntry,
+  plan: NumberingPlan,
+  settings: StoredSettings,
+): string {
+  const diagnostic = plan.diagnostics.find(
+    (item) => item.line === entry.heading.line,
+  );
+  if (diagnostic) return diagnostic.code;
+  if (
+    entry.heading.level < settings.topLevel ||
+    entry.heading.level > settings.bottomLevel
+  ) {
+    return "heading-outside-range";
+  }
+  if (entry.heading.level > settings.topLevel) {
+    return "heading-missing-top-level";
+  }
+  return "heading-not-numbered";
+}
 
 function removalArtifacts(
   plan: NumberingPlan,
@@ -144,7 +165,7 @@ export async function buildWorkflowPreview(
     if (entry.action === "skip") {
       skips.push({
         path: input.targetPath,
-        code: entry.reason,
+        code: stableSkipCode(entry, numberingPlan, input.settings),
         line: entry.heading.line,
       });
     } else if (
@@ -214,13 +235,10 @@ export async function buildWorkflowPreview(
       .filter(
         (source) => source.edits.length > 0 && source.path !== input.targetPath,
       )
-      .map((source) => ({ path: source.path, edits: source.edits.length })),
+      .map((source) => ({ path: source.path, edits: source.edits })),
     preserved,
     skips,
-    recoveryBoundary: [
-      "All source hashes are checked before the first write.",
-      "Recovery never overwrites externally changed files.",
-    ],
+    recoveryBoundary: ["source-hash-preflight", "external-change-preserved"],
   };
   return built.kind === "no-op"
     ? { kind: "no-op", groups }

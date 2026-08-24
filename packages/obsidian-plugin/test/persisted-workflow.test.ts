@@ -45,7 +45,27 @@ describe("buildWorkflowPreview", () => {
       '[[Target#1. Alpha|keep]] and [B](Target.md#1.1.%20Beta "title")',
     );
     expect(result.groups.targetEdits).toHaveLength(2);
-    expect(result.groups.linkSources).toEqual([{ path: "Links.md", edits: 2 }]);
+    expect(result.groups.linkSources).toEqual([
+      {
+        path: "Links.md",
+        edits: [
+          {
+            range: { from: 0, to: 21 },
+            expectedText: "[[Target#Alpha|keep]]",
+            replacementText: "[[Target#1. Alpha|keep]]",
+          },
+          {
+            range: { from: 26, to: 53 },
+            expectedText: '[B](Target.md#Beta "title")',
+            replacementText: '[B](Target.md#1.1.%20Beta "title")',
+          },
+        ],
+      },
+    ]);
+    expect(result.groups.recoveryBoundary).toEqual([
+      "source-hash-preflight",
+      "external-change-preserved",
+    ]);
   });
 
   it("returns no-op for a note with no safely owned changes", async () => {
@@ -119,5 +139,26 @@ describe("buildWorkflowPreview", () => {
         expect.objectContaining({ code: "semantic-prefix" }),
       ]),
     );
+  });
+
+  it("uses stable skip codes instead of planner sentences", async () => {
+    const result = await buildWorkflowPreview(
+      {
+        kind: "add",
+        targetPath: "Target.md",
+        sources: [{ path: "Target.md", text: "# Outside\n### Orphan" }],
+        settings,
+        resolveTarget: () => ({ kind: "missing" }),
+      },
+      deps,
+    );
+
+    expect(result.groups.skips.map(({ code }) => code)).toEqual([
+      "heading-outside-range",
+      "heading-missing-top-level",
+    ]);
+    expect(
+      result.groups.skips.some(({ code }) => code.includes("Heading")),
+    ).toBe(false);
   });
 });

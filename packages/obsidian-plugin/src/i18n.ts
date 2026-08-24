@@ -41,6 +41,7 @@ export type TranslationKey =
   | "notices.applyStale"
   | "notices.applyRecovery"
   | "notices.operationError"
+  | "notices.storageError"
   | "notices.recoveryAvailable"
   | "notices.recoveryNone"
   | "notices.restoreCompleted"
@@ -51,9 +52,15 @@ export type TranslationKey =
   | "modal.preview.skips"
   | "modal.preview.boundary"
   | "modal.preview.confirm"
+  | "modal.preview.action.add"
+  | "modal.preview.action.remove"
+  | "modal.preview.empty"
+  | "modal.preview.boundary.sourceHashPreflight"
+  | "modal.preview.boundary.externalChangePreserved"
   | "modal.recovery.aria"
   | "modal.recovery.heading"
   | "modal.recovery.restore"
+  | "modal.recovery.finalize"
   | "recovery.status.eligible"
   | "recovery.status.changed"
   | "recovery.status.restored"
@@ -118,6 +125,7 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     "notices.applyRecovery":
       "Writing stopped. Open recovery before continuing.",
     "notices.operationError": "The persisted operation could not be completed.",
+    "notices.storageError": "Plugin data could not be saved.",
     "notices.recoveryAvailable": "A persisted operation requires recovery.",
     "notices.recoveryNone": "No persisted operation requires recovery.",
     "notices.restoreCompleted": "Eligible files were restored.",
@@ -128,9 +136,17 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     "modal.preview.skips": "Skipped headings",
     "modal.preview.boundary": "Recovery boundary",
     "modal.preview.confirm": "Confirm current preview",
+    "modal.preview.action.add": "Add persisted numbering",
+    "modal.preview.action.remove": "Remove persisted numbering",
+    "modal.preview.empty": "(empty)",
+    "modal.preview.boundary.sourceHashPreflight":
+      "All source hashes are checked before the first write.",
+    "modal.preview.boundary.externalChangePreserved":
+      "Externally changed files are preserved during recovery.",
     "modal.recovery.aria": "Persisted operation recovery center",
     "modal.recovery.heading": "Recovery status",
     "modal.recovery.restore": "Restore eligible files",
+    "modal.recovery.finalize": "Complete recovery",
     "recovery.status.eligible": "eligible",
     "recovery.status.changed": "changed",
     "recovery.status.restored": "restored",
@@ -188,6 +204,7 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     "notices.applyStale": "预览已过期，未修改任何文件。",
     "notices.applyRecovery": "写入已停止，请先打开恢复中心。",
     "notices.operationError": "无法完成写入事务。",
+    "notices.storageError": "无法保存插件数据。",
     "notices.recoveryAvailable": "存在需要恢复的写入事务。",
     "notices.recoveryNone": "当前没有需要恢复的写入事务。",
     "notices.restoreCompleted": "可恢复文件已还原。",
@@ -198,9 +215,17 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     "modal.preview.skips": "跳过的标题",
     "modal.preview.boundary": "恢复边界",
     "modal.preview.confirm": "确认当前预览",
+    "modal.preview.action.add": "写入标题编号",
+    "modal.preview.action.remove": "移除写入编号",
+    "modal.preview.empty": "（空）",
+    "modal.preview.boundary.sourceHashPreflight":
+      "首次写入前会校验所有来源哈希。",
+    "modal.preview.boundary.externalChangePreserved":
+      "恢复时会保留经过外部修改的文件。",
     "modal.recovery.aria": "写入事务恢复中心",
     "modal.recovery.heading": "恢复状态",
     "modal.recovery.restore": "恢复可还原文件",
+    "modal.recovery.finalize": "完成恢复",
     "recovery.status.eligible": "可恢复",
     "recovery.status.changed": "已外部修改",
     "recovery.status.restored": "已恢复",

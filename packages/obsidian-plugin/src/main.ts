@@ -265,6 +265,13 @@ export class HeadingNumberingPlugin extends Plugin {
     WorkflowPreviewResult,
     { kind: "preview" }
   > | null = null;
+  private applyInFlight: { planId: string; token: object } | null = null;
+  private previewModal: {
+    planId: string;
+    modal: PersistedPreviewModal;
+  } | null = null;
+  private readonly recoveryNonces = new Map<string, object>();
+  private readonly recoveryInFlight = new Map<string, object>();
   private readonly openModals = new Set<{ close(): void }>();
   private readonly readingRoots = new Map<HTMLElement, ReadingRootState>();
 
@@ -364,6 +371,10 @@ export class HeadingNumberingPlugin extends Plugin {
     this.lifecycleGeneration += 1;
     this.previewGeneration += 1;
     this.currentPreview = null;
+    this.applyInFlight = null;
+    this.previewModal = null;
+    this.recoveryNonces.clear();
+    this.recoveryInFlight.clear();
     for (const modal of this.openModals) modal.close();
     this.openModals.clear();
     for (const root of this.readingRoots.keys()) {
@@ -389,9 +400,6 @@ export class HeadingNumberingPlugin extends Plugin {
       this.settingsErrors = validation.errors;
       return false;
     }
-    this.invalidatePersistedPreview();
-    this.settings = validation.value;
-    this.settingsErrors = [];
     if (!this.dataStore) {
       this.dataStore = new PluginDataStore(
         () => this.loadData(),
@@ -400,11 +408,20 @@ export class HeadingNumberingPlugin extends Plugin {
       );
       await this.dataStore.initialize();
     }
-    const saved = await this.dataStore.saveSettings(this.settings);
+    let saved: Awaited<ReturnType<PluginDataStore["saveSettings"]>>;
+    try {
+      saved = await this.dataStore.saveSettings(validation.value);
+    } catch {
+      this.showNotice("notices.storageError");
+      return false;
+    }
     if (!saved.ok) {
       this.settingsErrors = [...saved.errors];
       return false;
     }
+    this.invalidatePersistedPreview();
+    this.settings = saved.settings;
+    this.settingsErrors = [];
     await this.refreshVirtualRendering();
     return true;
   }
@@ -456,7 +473,8 @@ export class HeadingNumberingPlugin extends Plugin {
         return;
       }
       this.currentPreview = result;
-      const modal = new PersistedPreviewModal(
+      let modal: PersistedPreviewModal;
+      modal = new PersistedPreviewModal(
         this.app,
         result,
         this.currentLocale(),
@@ -465,7 +483,12 @@ export class HeadingNumberingPlugin extends Plugin {
             void this.applyExactPreview(result);
           }
         },
+        () => {
+          this.openModals.delete(modal);
+          if (this.previewModal?.modal === modal) this.previewModal = null;
+        },
       );
+      this.previewModal = { planId: result.planId, modal };
       this.openModals.add(modal);
       modal.open();
       this.showNotice("notices.previewReady");
@@ -509,7 +532,7 @@ export class HeadingNumberingPlugin extends Plugin {
   }
 
   async openRecoveryCenter(): Promise<void> {
-    const operation = this.dataStore?.recoveryOperations().at(-1);
+    const operation = this.dataStore?.latestRecoveryOperation();
     const vault = this.vaultAdapter;
     const journal = this.dataStore?.journal;
     if (!operation || !vault || !journal) {
@@ -531,26 +554,56 @@ export class HeadingNumberingPlugin extends Plugin {
   ): Promise<void> {
     const inspection = await inspectRecovery(operation, dependencies);
     if (this.disposed || generation !== this.lifecycleGeneration) return;
+    const nonce = {};
+    this.recoveryNonces.set(operation.id, nonce);
     let modal: RecoveryCenterModal;
     modal = new RecoveryCenterModal(
       this.app,
       inspection.files,
       this.currentLocale(),
       () => {
-        if (this.disposed || generation !== this.lifecycleGeneration) return;
-        modal.close();
-        void this.restoreAndRefresh(operation, generation, dependencies);
+        this.beginRecovery(operation, generation, dependencies, nonce);
+      },
+      () => {
+        this.openModals.delete(modal);
+        if (this.recoveryNonces.get(operation.id) === nonce) {
+          this.recoveryNonces.delete(operation.id);
+        }
       },
     );
     this.openModals.add(modal);
     modal.open();
   }
 
+  private beginRecovery(
+    operation: import("./persistence/types.js").PersistedOperation,
+    generation: number,
+    dependencies: import("./persistence/types.js").PersistenceDependencies,
+    nonce: object,
+  ): void {
+    if (
+      this.disposed ||
+      generation !== this.lifecycleGeneration ||
+      this.recoveryNonces.get(operation.id) !== nonce ||
+      this.recoveryInFlight.has(operation.id)
+    ) {
+      return;
+    }
+    this.recoveryNonces.delete(operation.id);
+    const token = {};
+    this.recoveryInFlight.set(operation.id, token);
+    void this.restoreAndRefresh(operation, generation, dependencies, token);
+  }
+
   private async restoreAndRefresh(
     operation: import("./persistence/types.js").PersistedOperation,
     generation: number,
     dependencies: import("./persistence/types.js").PersistenceDependencies,
+    token: object,
   ): Promise<void> {
+    let nextOperation:
+      | import("./persistence/types.js").PersistedOperation
+      | undefined;
     try {
       const result = await restoreEligibleFiles(operation, dependencies);
       if (this.disposed || generation !== this.lifecycleGeneration) return;
@@ -559,15 +612,18 @@ export class HeadingNumberingPlugin extends Plugin {
           ? "notices.restoreCompleted"
           : "notices.applyRecovery",
       );
-      await this.openRecoveryOperation(
-        result.operation,
-        generation,
-        dependencies,
-      );
+      nextOperation = result.operation;
     } catch {
       if (!this.disposed && generation === this.lifecycleGeneration) {
         this.showNotice("notices.operationError");
       }
+    } finally {
+      if (this.recoveryInFlight.get(operation.id) === token) {
+        this.recoveryInFlight.delete(operation.id);
+      }
+    }
+    if (nextOperation && !this.disposed) {
+      await this.openRecoveryOperation(nextOperation, generation, dependencies);
     }
   }
 
@@ -588,20 +644,37 @@ export class HeadingNumberingPlugin extends Plugin {
       !(active instanceof TFile) ||
       active.path !== preview.targetPath ||
       !this.vaultAdapter ||
-      !this.dataStore
+      !this.dataStore ||
+      this.applyInFlight !== null
     ) {
       this.invalidatePersistedPreview();
       this.showNotice("notices.previewInvalidated");
       return;
     }
-    const result = await executePersistedOperation(preview.operation, {
-      vault: this.vaultAdapter,
-      journal: this.dataStore.journal,
-      hashText: sha256Text,
-    });
-    if (this.disposed) return;
     this.currentPreview = null;
     this.previewGeneration += 1;
+    this.previewWasInvalidated = false;
+    const token = {};
+    this.applyInFlight = { planId: preview.planId, token };
+    if (this.previewModal?.planId === preview.planId) {
+      const { modal } = this.previewModal;
+      this.previewModal = null;
+      modal.close();
+    }
+    let result: Awaited<ReturnType<typeof executePersistedOperation>>;
+    try {
+      result = await executePersistedOperation(preview.operation, {
+        vault: this.vaultAdapter,
+        journal: this.dataStore.journal,
+        hashText: sha256Text,
+      });
+    } catch {
+      if (!this.disposed) this.showNotice("notices.operationError");
+      return;
+    } finally {
+      if (this.applyInFlight?.token === token) this.applyInFlight = null;
+    }
+    if (this.disposed) return;
     if (result.kind === "completed") {
       this.previewWasInvalidated = false;
       await this.refreshVirtualRendering();
@@ -814,6 +887,7 @@ export class HeadingNumberingPlugin extends Plugin {
       | "notices.applyStale"
       | "notices.applyRecovery"
       | "notices.operationError"
+      | "notices.storageError"
       | "notices.recoveryAvailable"
       | "notices.recoveryNone"
       | "notices.restoreCompleted",

@@ -27,6 +27,12 @@ export interface LoadedPluginData {
 type LoadData = () => Promise<unknown>;
 type SaveData = (value: unknown) => Promise<unknown>;
 
+interface CandidateState {
+  settings: StoredSettings;
+  journals: Map<string, PersistedOperation>;
+  latestJournalId: string | null;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -34,6 +40,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function own(value: Record<string, unknown>, key: string): unknown {
   const descriptor = Object.getOwnPropertyDescriptor(value, key);
   return descriptor && "value" in descriptor ? descriptor.value : undefined;
+}
+
+function hasOwnKey(value: Record<string, unknown>, key: string): boolean {
+  try {
+    return Object.getOwnPropertyDescriptor(value, key) !== undefined;
+  } catch {
+    return false;
+  }
 }
 
 function dataSnapshot(
@@ -71,9 +85,9 @@ export class PluginDataStore {
       );
       if (!validation.ok) throw new Error("journal-invalid");
       const snapshot = validation.operation;
-      await this.enqueueSave(() => {
-        this.journals.set(snapshot.id, snapshot);
-        this.currentLatestJournalId = snapshot.id;
+      await this.enqueueSave((candidate) => {
+        candidate.journals.set(snapshot.id, snapshot);
+        candidate.latestJournalId = snapshot.id;
       });
     },
   };
@@ -98,7 +112,11 @@ export class PluginDataStore {
     this.journals.clear();
     this.currentLatestJournalId = null;
 
-    const envelope = isRecord(raw) && isRecord(own(raw, "settings"));
+    const envelope =
+      isRecord(raw) &&
+      ["settings", "journals", "latestJournalId"].some((key) =>
+        hasOwnKey(raw, key),
+      );
     const settingsInput = envelope ? own(raw, "settings") : raw;
     const fresh = raw === null || raw === undefined;
     const settingsValidation = fresh
@@ -156,8 +174,8 @@ export class PluginDataStore {
     const validation = validateStoredSettings(next);
     if (!validation.ok) return validation;
     const settings = validation.value;
-    await this.enqueueSave(() => {
-      this.currentSettings = settings;
+    await this.enqueueSave((candidate) => {
+      candidate.settings = settings;
     });
     return { ok: true, settings: this.settings };
   }
@@ -172,18 +190,57 @@ export class PluginDataStore {
       .map((operation) => snapshotOperation(operation));
   }
 
-  private enqueueSave(mutate: () => void): Promise<void> {
+  latestRecoveryOperation(): PersistedOperation | null {
+    const pointed = this.currentLatestJournalId
+      ? this.journals.get(this.currentLatestJournalId)
+      : undefined;
+    if (pointed && isRecoverable(pointed)) return snapshotOperation(pointed);
+    const fallback = [...this.journals.values()]
+      .filter(isRecoverable)
+      .sort(
+        (left, right) =>
+          compareCodeUnits(left.createdAt, right.createdAt) ||
+          compareCodeUnits(left.id, right.id),
+      )
+      .at(-1);
+    return fallback ? snapshotOperation(fallback) : null;
+  }
+
+  private enqueueSave(
+    mutate: (candidate: CandidateState) => void,
+  ): Promise<void> {
     const task = this.saveTail.then(async () => {
-      mutate();
+      const candidate: CandidateState = {
+        settings: { ...this.currentSettings },
+        journals: new Map(this.journals),
+        latestJournalId: this.currentLatestJournalId,
+      };
+      mutate(candidate);
       await this.saveData(
         dataSnapshot(
-          this.currentSettings,
-          this.journals,
-          this.currentLatestJournalId,
+          candidate.settings,
+          candidate.journals,
+          candidate.latestJournalId,
         ),
       );
+      this.currentSettings = candidate.settings;
+      this.journals.clear();
+      for (const [id, operation] of candidate.journals) {
+        this.journals.set(id, operation);
+      }
+      this.currentLatestJournalId = candidate.latestJournalId;
     });
     this.saveTail = task.catch(() => undefined);
     return task;
   }
+}
+
+function isRecoverable(operation: PersistedOperation): boolean {
+  return ["applying", "recovery-required", "restoring"].includes(
+    operation.state,
+  );
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }

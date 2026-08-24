@@ -25,11 +25,14 @@ function list(container: HTMLElement, items: readonly string[]): void {
 }
 
 export class PersistedPreviewModal extends Modal {
+  private consumed = false;
+
   constructor(
     app: App,
     private readonly model: PreviewModalModel,
     private readonly locale: Locale,
     private readonly confirm: () => void,
+    private readonly onClosedCallback: () => void = () => undefined,
   ) {
     super(app);
   }
@@ -41,6 +44,14 @@ export class PersistedPreviewModal extends Modal {
       "aria-label",
       translate(this.locale, "modal.preview.aria"),
     );
+    contentEl.createEl("h2", {
+      text: `${translate(
+        this.locale,
+        this.model.previewKind === "add"
+          ? "modal.preview.action.add"
+          : "modal.preview.action.remove",
+      )} — ${this.model.targetPath}`,
+    });
     heading(
       contentEl,
       translate(this.locale, "modal.preview.target"),
@@ -48,8 +59,13 @@ export class PersistedPreviewModal extends Modal {
     );
     list(
       contentEl,
-      this.model.groups.targetEdits.map(
-        (edit) => `${edit.range.from}-${edit.range.to}`,
+      this.model.groups.targetEdits.map((edit) =>
+        this.editText(
+          edit.range.from,
+          edit.range.to,
+          edit.expectedText,
+          edit.replacementText,
+        ),
       ),
     );
     heading(
@@ -59,8 +75,16 @@ export class PersistedPreviewModal extends Modal {
     );
     list(
       contentEl,
-      this.model.groups.linkSources.map(
-        (source) => `${source.path}: ${source.edits}`,
+      this.model.groups.linkSources.flatMap((source) =>
+        source.edits.map(
+          (edit) =>
+            `${source.path} ${this.editText(
+              edit.range.from,
+              edit.range.to,
+              edit.expectedText,
+              edit.replacementText,
+            )}`,
+        ),
       ),
     );
     heading(
@@ -82,12 +106,42 @@ export class PersistedPreviewModal extends Modal {
       this.model.groups.skips.map((item) => `${item.path}: ${item.code}`),
     );
     heading(contentEl, translate(this.locale, "modal.preview.boundary"));
-    list(contentEl, this.model.groups.recoveryBoundary);
+    list(
+      contentEl,
+      this.model.groups.recoveryBoundary.map((code) =>
+        translate(
+          this.locale,
+          code === "source-hash-preflight"
+            ? "modal.preview.boundary.sourceHashPreflight"
+            : "modal.preview.boundary.externalChangePreserved",
+        ),
+      ),
+    );
     const button = contentEl.createEl("button", {
       text: translate(this.locale, "modal.preview.confirm"),
     });
     button.setAttr("type", "button");
-    button.addEventListener("click", () => this.confirm());
+    button.addEventListener("click", () => {
+      if (this.consumed) return;
+      this.consumed = true;
+      button.disabled = true;
+      this.close();
+      this.confirm();
+    });
+  }
+
+  onClose(): void {
+    this.onClosedCallback();
+  }
+
+  private editText(
+    from: number,
+    to: number,
+    expectedText: string,
+    replacementText: string,
+  ): string {
+    const empty = translate(this.locale, "modal.preview.empty");
+    return `${from}-${to}: ${expectedText || empty} → ${replacementText || empty}`;
   }
 }
 
@@ -98,11 +152,14 @@ function recoveryStatusKey(
 }
 
 export class RecoveryCenterModal extends Modal {
+  private consumed = false;
+
   constructor(
     app: App,
     private readonly files: readonly RecoveryFileInspection[],
     private readonly locale: Locale,
     private readonly restore: () => void,
+    private readonly onClosedCallback: () => void = () => undefined,
   ) {
     super(app);
   }
@@ -122,13 +179,31 @@ export class RecoveryCenterModal extends Modal {
           `${file.path}: ${translate(this.locale, recoveryStatusKey(file.status))}`,
       ),
     );
+    const hasEligible = this.files.some((file) => file.status === "eligible");
+    const canFinalize =
+      !hasEligible &&
+      this.files.length > 0 &&
+      this.files.every(
+        (file) => file.status === "pending" || file.status === "restored",
+      );
     const button = contentEl.createEl("button", {
-      text: translate(this.locale, "modal.recovery.restore"),
+      text: translate(
+        this.locale,
+        hasEligible ? "modal.recovery.restore" : "modal.recovery.finalize",
+      ),
     });
     button.setAttr("type", "button");
-    button.disabled = !this.files.some((file) => file.status === "eligible");
+    button.disabled = !(hasEligible || canFinalize);
     button.addEventListener("click", () => {
-      if (!button.disabled) this.restore();
+      if (button.disabled || this.consumed) return;
+      this.consumed = true;
+      button.disabled = true;
+      this.restore();
+      this.close();
     });
+  }
+
+  onClose(): void {
+    this.onClosedCallback();
   }
 }

@@ -9,10 +9,16 @@ const state = vi.hoisted(() => ({
   linkTargets: new Map<string, string>(),
   loadedData: undefined as unknown,
   modals: [] as unknown[],
+  modalButtons: [] as Array<{
+    disabled: boolean;
+    text: string;
+    click(): void;
+  }>,
   notices: [] as string[],
   readQueue: [] as Promise<string>[],
   reads: 0,
   savedData: [] as unknown[],
+  saveError: false,
   settingAvailable: true,
   settingOpens: 0,
   settingTabIds: [] as string[],
@@ -87,13 +93,29 @@ vi.mock("obsidian", () => {
       return state.loadedData;
     }
     async saveData(value: unknown) {
+      if (state.saveError) throw new Error("storage");
       state.savedData.push(value);
     }
   }
   class Modal {
     contentEl = {
       empty() {},
-      createEl() {
+      createEl(tag: string, options?: { text?: string }) {
+        if (tag === "button") {
+          let listener = () => undefined;
+          const button = {
+            disabled: false,
+            text: options?.text ?? "",
+            click: () => listener(),
+            setAttr() {},
+            addEventListener(_name: string, callback: () => void) {
+              listener = callback;
+            },
+            createEl() {},
+          };
+          state.modalButtons.push(button);
+          return button;
+        }
         return { setAttr() {}, addEventListener() {}, createEl() {} };
       },
       setAttr() {},
@@ -179,10 +201,12 @@ beforeEach(() => {
   state.linkTargets.clear();
   state.loadedData = { ...DEFAULT_STORED_SETTINGS, mode: "persisted" };
   state.modals.length = 0;
+  state.modalButtons.length = 0;
   state.notices.length = 0;
   state.readQueue.length = 0;
   state.reads = 0;
   state.savedData.length = 0;
+  state.saveError = false;
   state.settingAvailable = true;
   state.settingOpens = 0;
   state.settingTabIds.length = 0;
@@ -249,6 +273,21 @@ describe("persisted plugin workflow", () => {
     expect(state.notices.at(-1)).toBe("Persisted changes completed.");
   });
 
+  it("consumes apply authority synchronously across command and modal triggers", async () => {
+    state.activePath = "Target.md";
+    state.files.set("Target.md", "## Alpha");
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    await plugin.previewPersisted("add");
+
+    const commandApply = plugin.applyCurrentPreview();
+    state.modalButtons.at(-1)?.click();
+    const duplicateApply = plugin.applyCurrentPreview();
+    await Promise.all([commandApply, duplicateApply]);
+
+    expect(state.writes).toEqual([["Target.md", "## 1. Alpha"]]);
+  });
+
   it("invalidates preview on settings and active-file changes", async () => {
     state.activePath = "Target.md";
     state.files.set("Target.md", "## Alpha");
@@ -265,6 +304,24 @@ describe("persisted plugin workflow", () => {
     state.events.get("file-open")?.forEach((callback) => callback());
     await plugin.applyCurrentPreview();
     expect(state.writes).toEqual([]);
+  });
+
+  it("keeps settings and preview authority when storage rejects a settings save", async () => {
+    state.activePath = "Target.md";
+    state.files.set("Target.md", "## Alpha");
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    await plugin.previewPersisted("add");
+    const preview = plugin.activePreview;
+    state.saveError = true;
+
+    await expect(
+      plugin.saveSettings({ ...plugin.settings, titleSeparator: " · " }),
+    ).resolves.toBe(false);
+
+    expect(plugin.settings.titleSeparator).toBe(". ");
+    expect(plugin.activePreview).toBe(preview);
+    expect(state.notices.at(-1)).toBe("Plugin data could not be saved.");
   });
 
   it("keeps a stale source at zero writes through executor preflight", async () => {
@@ -342,6 +399,95 @@ describe("persisted plugin workflow", () => {
 
     expect(state.notices[0]).toBe("A persisted operation requires recovery.");
     expect(state.modals).toHaveLength(1);
+  });
+
+  it("uses one recovery authority across multiple modals and double clicks", async () => {
+    const beforeText = "## Alpha";
+    const afterText = "## 1. Alpha";
+    const operation = {
+      id: "recover-once",
+      createdAt: "2026-08-25T00:00:00.000Z",
+      state: "recovery-required" as const,
+      completedPaths: ["Target.md"],
+      files: [
+        {
+          path: "Target.md",
+          beforeText,
+          beforeHash: await sha256Text(beforeText),
+          afterText,
+          afterHash: await sha256Text(afterText),
+          role: "target" as const,
+        },
+      ],
+    };
+    state.activePath = "Target.md";
+    state.files.set("Target.md", afterText);
+    state.loadedData = {
+      settings: { ...DEFAULT_STORED_SETTINGS, mode: "persisted" },
+      journals: { "recover-once": operation },
+      latestJournalId: "recover-once",
+    };
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    await plugin.openRecoveryCenter();
+    const firstModal = state.modals.at(-1) as { close(): void };
+    const first = state.modalButtons.at(-1);
+
+    firstModal.close();
+    first?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(state.writes).toEqual([]);
+
+    await plugin.openRecoveryCenter();
+    const second = state.modalButtons.at(-1);
+    second?.click();
+    second?.click();
+    await vi.waitFor(() => {
+      expect(state.files.get("Target.md")).toBe(beforeText);
+    });
+
+    expect(state.writes).toEqual([["Target.md", beforeText]]);
+  });
+
+  it("finalizes an all-pending recovery with zero vault writes", async () => {
+    const beforeText = "## Alpha";
+    const afterText = "## 1. Alpha";
+    const operation = {
+      id: "pending-only",
+      createdAt: "2026-08-25T00:00:00.000Z",
+      state: "applying" as const,
+      completedPaths: [],
+      files: [
+        {
+          path: "Target.md",
+          beforeText,
+          beforeHash: await sha256Text(beforeText),
+          afterText,
+          afterHash: await sha256Text(afterText),
+          role: "target" as const,
+        },
+      ],
+    };
+    state.activePath = "Target.md";
+    state.files.set("Target.md", beforeText);
+    state.loadedData = {
+      settings: { ...DEFAULT_STORED_SETTINGS, mode: "persisted" },
+      journals: { "pending-only": operation },
+      latestJournalId: "pending-only",
+    };
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    await plugin.openRecoveryCenter();
+
+    expect(state.modalButtons.at(-1)?.text).toBe("Complete recovery");
+    state.modalButtons.at(-1)?.click();
+    await vi.waitFor(() => {
+      const latest = state.savedData.at(-1) as {
+        journals?: Record<string, { state?: string }>;
+      };
+      expect(latest.journals?.["pending-only"]?.state).toBe("restored");
+    });
+    expect(state.writes).toEqual([]);
   });
 
   it("drops a late preview callback after unload", async () => {
