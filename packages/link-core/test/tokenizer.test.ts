@@ -108,6 +108,31 @@ describe("scanHeadingLinks", () => {
     expect(scanHeadingLinks(markdown)).toEqual([]);
   });
 
+  it.each([
+    ["closed CRLF frontmatter", "---\r\nlink: [[Hidden#Heading]]\r\n---\r\n"],
+    ["unclosed CRLF frontmatter", "---\r\nlink: [[Hidden#Heading]]\r\n"],
+    ["CRLF backtick fence", "```md\r\n[[Hidden#Heading]]\r\n```\r\n"],
+    ["CRLF tilde fence", "~~~md\r\n[[Hidden#Heading]]\r\n~~~\r\n"],
+  ])("protects heading links inside %s", (_name, markdown) => {
+    expect(scanHeadingLinks(markdown)).toEqual([]);
+  });
+
+  it.each([
+    ["Wiki opener", "[[Broken#Old\r\n[[Target#Old]]", "[[Target#Old]]"],
+    [
+      "Markdown label opener",
+      "[broken\r\n[label](Target.md#Old)",
+      "[label](Target.md#Old)",
+    ],
+  ])(
+    "does not close an unclosed %s from a later line",
+    (_name, markdown, raw) => {
+      expect(scanHeadingLinks(markdown).map((token) => token.raw)).toEqual([
+        raw,
+      ]);
+    },
+  );
+
   it("keeps pure-file and block-reference candidates available to the planner", () => {
     const markdown = "[[Target]] [[Target#^block]] [file](Target.md)";
 

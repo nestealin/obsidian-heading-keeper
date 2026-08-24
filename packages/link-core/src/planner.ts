@@ -7,30 +7,37 @@ import type {
   LinkPlan,
   LinkToken,
   PlanHeadingLinkChangesInput,
+  ResolvedTarget,
 } from "./types.js";
 
-function normalizeTargetPath(path: string): string {
+function normalizeTargetPath(path: string): string | null {
+  const unifiedPath = path.replaceAll("\\", "/");
+  if (
+    unifiedPath.length === 0 ||
+    unifiedPath.startsWith("/") ||
+    /^[A-Za-z]:\//.test(unifiedPath)
+  ) {
+    return null;
+  }
+
   const normalizedSegments: string[] = [];
-  for (const segment of path.replaceAll("\\", "/").split("/")) {
-    if (segment === "" || segment === ".") continue;
-    if (segment === "..") {
-      if (normalizedSegments.at(-1) !== "..") {
-        normalizedSegments.pop();
-      } else {
-        normalizedSegments.push(segment);
-      }
+  for (const segment of unifiedPath.split("/")) {
+    if (segment === "") return null;
+    if (segment === "." || segment === "..") {
+      if (normalizedSegments.length === 0) return null;
+      if (segment === "..") normalizedSegments.pop();
       continue;
     }
     normalizedSegments.push(segment.normalize("NFC"));
   }
-  return normalizedSegments.join("/");
+  return normalizedSegments.length === 0 ? null : normalizedSegments.join("/");
 }
 
 function identity(rename: HeadingRename): string | null {
+  const targetPath = normalizeTargetPath(rename.targetPath);
+  if (targetPath === null) return null;
   const heading = normalizeHeadingFragment(rename.oldHeading);
-  return heading.ok
-    ? `${normalizeTargetPath(rename.targetPath)}\u0000${heading.value}`
-    : null;
+  return heading.ok ? `${targetPath}\u0000${heading.value}` : null;
 }
 
 function diagnostic(
@@ -45,6 +52,17 @@ function isExternalLinkPath(linkPath: string): boolean {
   return (
     linkPath.startsWith("//") || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(linkPath)
   );
+}
+
+function encodeWikiHeadingFragment(heading: string): string {
+  let encoded = "";
+  for (const character of heading.normalize("NFC")) {
+    if (character === "%") encoded += "%25";
+    else if (character === "|") encoded += "%7C";
+    else if (character === "]") encoded += "%5D";
+    else encoded += character;
+  }
+  return encoded;
 }
 
 export function planHeadingLinkChanges({
@@ -109,7 +127,19 @@ export function planHeadingLinkChanges({
       );
       continue;
     }
-    const target = resolveTarget(sourcePath, token.linkPath);
+    let target: ResolvedTarget;
+    try {
+      target = resolveTarget(sourcePath, token.linkPath);
+    } catch {
+      diagnostics.push(
+        diagnostic(
+          token,
+          "target-resolution-error",
+          "Target resolution failed.",
+        ),
+      );
+      continue;
+    }
     if (target.kind === "missing") {
       diagnostics.push(
         diagnostic(
@@ -141,6 +171,16 @@ export function planHeadingLinkChanges({
       continue;
     }
     const targetPath = normalizeTargetPath(target.path);
+    if (targetPath === null) {
+      diagnostics.push(
+        diagnostic(
+          token,
+          "target-path-invalid",
+          "Resolver returned a path outside the vault-relative identity domain.",
+        ),
+      );
+      continue;
+    }
     const matches = renamesByIdentity.get(
       `${targetPath}\u0000${fragment.value}`,
     );
@@ -161,7 +201,7 @@ export function planHeadingLinkChanges({
     const localTo = token.fragmentRange.to - token.range.from;
     const newFragment =
       token.kind === "wiki" || token.kind === "embed"
-        ? rename.newHeading.normalize("NFC")
+        ? encodeWikiHeadingFragment(rename.newHeading)
         : encodeURIComponent(rename.newHeading.normalize("NFC"));
     edits.push({
       range: token.range,

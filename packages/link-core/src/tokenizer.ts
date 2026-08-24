@@ -1,19 +1,43 @@
 import type { SourceRange } from "@heading-numbering/core";
 import type { LinkToken } from "./types.js";
 
+interface LogicalLine {
+  from: number;
+  to: number;
+  text: string;
+}
+
+function scanLogicalLines(markdown: string): LogicalLine[] {
+  const lines: LogicalLine[] = [];
+  let from = 0;
+
+  while (from < markdown.length) {
+    const newline = markdown.indexOf("\n", from);
+    const to = newline < 0 ? markdown.length : newline + 1;
+    const contentTo =
+      newline > from && markdown[newline - 1] === "\r" ? newline - 1 : newline;
+    lines.push({
+      from,
+      to,
+      text: markdown.slice(from, newline < 0 ? markdown.length : contentTo),
+    });
+    from = to;
+  }
+
+  return lines;
+}
+
 function protectedRanges(markdown: string): SourceRange[] {
   const ranges: SourceRange[] = [];
-  const lines = Array.from(markdown.matchAll(/.*(?:\n|$)/g)).filter(
-    (match) => match[0].length > 0,
-  );
+  const lines = scanLogicalLines(markdown);
 
-  if (lines[0]?.[0].replace(/\r?\n$/, "") === "---") {
+  if (lines[0]?.text === "---") {
     let frontmatterClosed = false;
     for (let lineIndex = 1; lineIndex < lines.length; lineIndex += 1) {
       const line = lines[lineIndex];
       if (!line) continue;
-      if (/^(?:---|\.\.\.)[ \t]*(?:\r?\n)?$/.test(line[0])) {
-        ranges.push({ from: 0, to: (line.index ?? 0) + line[0].length });
+      if (/^(?:---|\.\.\.)[ \t]*$/.test(line.text)) {
+        ranges.push({ from: 0, to: line.to });
         frontmatterClosed = true;
         break;
       }
@@ -24,13 +48,12 @@ function protectedRanges(markdown: string): SourceRange[] {
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
     const line = lines[lineIndex];
     if (!line) continue;
-    const text = line[0].replace(/\r?\n$/, "");
-    const opener = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(text);
+    const opener = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line.text);
     if (!opener) continue;
     const run = opener[2];
     const info = opener[3] ?? "";
     if (!run || (run[0] === "`" && info.includes("`"))) continue;
-    const from = line.index ?? 0;
+    const from = line.from;
     let to = markdown.length;
     for (
       let closeIndex = lineIndex + 1;
@@ -39,14 +62,13 @@ function protectedRanges(markdown: string): SourceRange[] {
     ) {
       const closing = lines[closeIndex];
       if (!closing) continue;
-      const closingText = closing[0].replace(/\r?\n$/, "");
-      const closingRun = /^( {0,3})(`+|~+)[ \t]*$/.exec(closingText)?.[2];
+      const closingRun = /^( {0,3})(`+|~+)[ \t]*$/.exec(closing.text)?.[2];
       if (
         closingRun !== undefined &&
         closingRun[0] === run[0] &&
         closingRun.length >= run.length
       ) {
-        to = (closing.index ?? 0) + closing[0].length;
+        to = closing.to;
         lineIndex = closeIndex;
         break;
       }
@@ -55,8 +77,8 @@ function protectedRanges(markdown: string): SourceRange[] {
   }
 
   for (const line of lines) {
-    const lineFrom = line.index ?? 0;
-    const lineTo = lineFrom + line[0].replace(/\r?\n$/, "").length;
+    const lineFrom = line.from;
+    const lineTo = lineFrom + line.text.length;
     let cursor = lineFrom;
     while (cursor < lineTo) {
       if (markdown[cursor] !== "`" || isProtected(cursor, ranges)) {
@@ -86,12 +108,20 @@ function isProtected(index: number, ranges: readonly SourceRange[]): boolean {
   return ranges.some((range) => index >= range.from && index < range.to);
 }
 
+function logicalLineEnd(markdown: string, from: number): number {
+  for (let index = from; index < markdown.length; index += 1) {
+    if (markdown[index] === "\r" || markdown[index] === "\n") return index;
+  }
+  return markdown.length;
+}
+
 function wikiToken(markdown: string, from: number): LinkToken | null {
   const embedded = markdown.startsWith("![[", from);
   const startLength = embedded ? 3 : 2;
   if (!embedded && !markdown.startsWith("[[", from)) return null;
+  const lineEnd = logicalLineEnd(markdown, from);
   const close = markdown.indexOf("]]", from + startLength);
-  if (close < 0) return null;
+  if (close < 0 || close + 2 > lineEnd) return null;
   const to = close + 2;
   const contentFrom = from + startLength;
   const content = markdown.slice(contentFrom, close);
@@ -122,8 +152,9 @@ function markdownToken(markdown: string, from: number): LinkToken | null {
   const image = markdown.startsWith("![", from);
   const labelFrom = from + (image ? 2 : 1);
   if (!image && markdown[from] !== "[") return null;
+  const lineEnd = logicalLineEnd(markdown, from);
   const labelTo = markdown.indexOf("](", labelFrom);
-  if (labelTo < 0) return null;
+  if (labelTo < 0 || labelTo + 2 > lineEnd) return null;
   const openParen = labelTo + 1;
   let cursor = openParen + 1;
   let angleDestination = false;
@@ -134,16 +165,11 @@ function markdownToken(markdown: string, from: number): LinkToken | null {
     angleDestination = true;
     destinationFrom = cursor + 1;
     destinationTo = markdown.indexOf(">", destinationFrom);
-    if (
-      destinationTo < 0 ||
-      markdown.slice(destinationFrom, destinationTo).includes("\n")
-    ) {
-      return null;
-    }
+    if (destinationTo < 0 || destinationTo >= lineEnd) return null;
     cursor = destinationTo + 1;
   } else {
     let depth = 0;
-    while (cursor < markdown.length) {
+    while (cursor < lineEnd) {
       const character = markdown[cursor];
       if (character === "\\") {
         cursor += 2;
@@ -169,13 +195,12 @@ function markdownToken(markdown: string, from: number): LinkToken | null {
   if (titleStart === '"' || titleStart === "'" || titleStart === "(") {
     const titleClose = titleStart === "(" ? ")" : titleStart;
     let titleTo = cursor + 1;
-    while (titleTo < markdown.length) {
+    while (titleTo < lineEnd) {
       if (markdown[titleTo] === "\\") {
         titleTo += 2;
         continue;
       }
       if (markdown[titleTo] === titleClose) break;
-      if (markdown[titleTo] === "\n") return null;
       titleTo += 1;
     }
     if (markdown[titleTo] !== titleClose) return null;
