@@ -38,10 +38,14 @@ function run(
   arguments_: string[] = [],
   environment: NodeJS.ProcessEnv = {},
 ) {
+  const env = { ...process.env, ...environment };
+  for (const [key, value] of Object.entries(environment)) {
+    if (value === undefined) delete env[key];
+  }
   return spawnSync(process.execPath, [script, ...arguments_], {
     cwd: repositoryRoot,
     encoding: "utf8",
-    env: { ...process.env, ...environment },
+    env,
   });
 }
 
@@ -147,7 +151,9 @@ describe("release surface", () => {
   });
 
   it("runs caller-supplied rejected-term checks and explicitly skips when absent", () => {
-    const absent = run(releaseRejectedScript);
+    const absent = run(releaseRejectedScript, [], {
+      REJECTED_TERMS_JSON: undefined,
+    });
     expect(absent.status).toBe(0);
     expect(absent.stdout).toContain("skipped");
 
