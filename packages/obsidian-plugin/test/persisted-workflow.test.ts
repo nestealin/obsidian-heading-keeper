@@ -104,6 +104,58 @@ describe("buildWorkflowPreview", () => {
     ]);
   });
 
+  it.each([
+    ["Wiki", "## Alpha\n## [[#Alpha]]", "## 1. Alpha\n## 2. [[#1. Alpha]]"],
+    [
+      "Markdown",
+      "## Alpha\n## [Alpha](#Alpha)",
+      "## 1. Alpha\n## 2. [Alpha](#1.%20Alpha)",
+    ],
+  ])(
+    "composes numbering with a %s heading link nested inside heading text",
+    async (_syntax, beforeText, numberedText) => {
+      const resolveTarget = (sourcePath: string, linkPath: string) => {
+        expect([sourcePath, linkPath]).toEqual(["Target.md", ""]);
+        return { kind: "file" as const, path: "Target.md" };
+      };
+      const added = await buildWorkflowPreview(
+        {
+          kind: "add",
+          targetPath: "Target.md",
+          sources: [{ path: "Target.md", text: beforeText }],
+          settings,
+          resolveTarget,
+        },
+        deps,
+      );
+
+      expect(added.kind).toBe("preview");
+      if (added.kind !== "preview") return;
+      expect(added.operation.files).toHaveLength(1);
+      expect(added.operation.files[0]?.afterText).toBe(numberedText);
+      expect(added.groups.targetEdits).toHaveLength(2);
+      expect(added.groups.linkSources).toHaveLength(1);
+
+      const removed = await buildWorkflowPreview(
+        {
+          kind: "remove",
+          targetPath: "Target.md",
+          sources: [{ path: "Target.md", text: numberedText }],
+          settings,
+          resolveTarget,
+        },
+        deps,
+      );
+
+      expect(removed.kind).toBe("preview");
+      if (removed.kind !== "preview") return;
+      expect(removed.operation.files).toHaveLength(1);
+      expect(removed.operation.files[0]?.afterText).toBe(beforeText);
+      expect(removed.groups.targetEdits).toHaveLength(2);
+      expect(removed.groups.linkSources).toHaveLength(1);
+    },
+  );
+
   it("returns no-op for a note with no safely owned changes", async () => {
     const result = await buildWorkflowPreview(
       {

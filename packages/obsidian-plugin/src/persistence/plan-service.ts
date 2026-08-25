@@ -48,6 +48,20 @@ function copiedEdit(edit: PlannedTextEdit): PlannedTextEdit {
   };
 }
 
+function prefixInsertionEdit(edit: PlannedTextEdit): PlannedTextEdit {
+  if (!edit.replacementText.endsWith(edit.expectedText)) {
+    throw new PersistedPlanError("invalid-target-plan");
+  }
+  return {
+    range: { from: edit.range.from, to: edit.range.from },
+    expectedText: "",
+    replacementText: edit.replacementText.slice(
+      0,
+      edit.replacementText.length - edit.expectedText.length,
+    ),
+  };
+}
+
 function applyVerifiedEdits(
   beforeText: string,
   edits: readonly PlannedTextEdit[],
@@ -105,18 +119,26 @@ export async function buildPersistedOperation(
   let targetAfter: string;
   try {
     targetAfter = applyPlan(targetBefore, input.target.numberingPlan);
+    if (applyPlan(targetAfter, input.target.numberingPlan) !== targetAfter) {
+      throw new PersistedPlanError("invalid-target-plan");
+    }
   } catch {
     throw new PersistedPlanError("invalid-target-plan");
   }
   const targetNumberingEdits = input.target.numberingPlan.entries.flatMap(
     (entry) => (entry.edit ? [copiedEdit(entry.edit)] : []),
   );
+  const targetNumberingInsertions =
+    targetNumberingEdits.map(prefixInsertionEdit);
   const files = new Map<string, MutableFilePlan>();
   files.set(targetPath, {
     path: targetPath,
     beforeText: targetBefore,
     role: "target",
-    edits: [...targetNumberingEdits, ...input.target.linkEdits.map(copiedEdit)],
+    edits: [
+      ...targetNumberingInsertions,
+      ...input.target.linkEdits.map(copiedEdit),
+    ],
   });
 
   for (const source of input.linkSources) {
@@ -150,9 +172,12 @@ export async function buildPersistedOperation(
     });
   if (materialized.length === 0) return { kind: "no-op" };
 
-  // applyPlan remains the authority for target-plan integrity; the edit replay
-  // must agree with its output before target link edits are added.
-  if (applyVerifiedEdits(targetBefore, targetNumberingEdits) !== targetAfter) {
+  // applyPlan remains the authority for target-plan integrity. Persisted writes
+  // replay only the verified prefix insertion so nested heading-link edits can
+  // compose without weakening the complete-plan check.
+  if (
+    applyVerifiedEdits(targetBefore, targetNumberingInsertions) !== targetAfter
+  ) {
     throw new PersistedPlanError("invalid-target-plan");
   }
 
