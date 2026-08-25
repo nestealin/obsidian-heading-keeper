@@ -39,6 +39,7 @@ import {
   inspectRecovery,
   restoreEligibleFiles,
 } from "./persistence/executor.js";
+import { validatePersistedOperation } from "./persistence/operation-validator.js";
 import { sha256Text } from "./persistence/plan-service.js";
 import {
   createHeadingNumberingExtension,
@@ -275,14 +276,17 @@ export class HeadingNumberingPlugin extends Plugin {
     WorkflowPreviewResult,
     { kind: "preview" }
   > | null = null;
-  private applyInFlight: { planId: string; token: object } | null = null;
+  private mutationAuthority: {
+    kind: "apply" | "recovery";
+    token: object;
+  } | null = null;
   private previewModal: {
     planId: string;
     modal: PersistedPreviewModal;
     nonce: object;
   } | null = null;
-  private readonly recoveryNonces = new Map<string, object>();
-  private readonly recoveryInFlight = new Map<string, object>();
+  private readonly recoveryNonces = new Map<object, string>();
+  private readonly recoveryModals = new Map<object, RecoveryCenterModal>();
   private readonly openModals = new Set<{ close(): void }>();
   private readonly readingRoots = new Map<HTMLElement, ReadingRootState>();
 
@@ -382,10 +386,9 @@ export class HeadingNumberingPlugin extends Plugin {
     this.lifecycleGeneration += 1;
     this.previewGeneration += 1;
     this.currentPreview = null;
-    this.applyInFlight = null;
+    this.mutationAuthority = null;
     this.previewModal = null;
-    this.recoveryNonces.clear();
-    this.recoveryInFlight.clear();
+    this.revokeRecoveryModals();
     for (const modal of this.openModals) modal.close();
     this.openModals.clear();
     for (const root of this.readingRoots.keys()) {
@@ -618,7 +621,7 @@ export class HeadingNumberingPlugin extends Plugin {
     const inspection = await inspectRecovery(operation, dependencies);
     if (this.disposed || generation !== this.lifecycleGeneration) return;
     const nonce = {};
-    this.recoveryNonces.set(operation.id, nonce);
+    this.recoveryNonces.set(nonce, operation.id);
     let modal: RecoveryCenterModal;
     modal = new RecoveryCenterModal(
       this.app,
@@ -629,11 +632,11 @@ export class HeadingNumberingPlugin extends Plugin {
       },
       () => {
         this.openModals.delete(modal);
-        if (this.recoveryNonces.get(operation.id) === nonce) {
-          this.recoveryNonces.delete(operation.id);
-        }
+        this.recoveryNonces.delete(nonce);
+        this.recoveryModals.delete(nonce);
       },
     );
+    this.recoveryModals.set(nonce, modal);
     this.openModals.add(modal);
     modal.open();
   }
@@ -647,19 +650,19 @@ export class HeadingNumberingPlugin extends Plugin {
     if (
       this.disposed ||
       generation !== this.lifecycleGeneration ||
-      this.recoveryNonces.get(operation.id) !== nonce ||
-      this.recoveryInFlight.has(operation.id)
+      this.recoveryNonces.get(nonce) !== operation.id ||
+      this.mutationAuthority !== null
     ) {
       return;
     }
-    this.recoveryNonces.delete(operation.id);
     const token = {};
-    this.recoveryInFlight.set(operation.id, token);
-    void this.restoreAndRefresh(operation, generation, dependencies, token);
+    this.mutationAuthority = { kind: "recovery", token };
+    this.revokeRecoveryModals();
+    void this.restoreAndRefresh(operation.id, generation, dependencies, token);
   }
 
   private async restoreAndRefresh(
-    operation: import("./persistence/types.js").PersistedOperation,
+    operationId: string,
     generation: number,
     dependencies: import("./persistence/types.js").PersistenceDependencies,
     token: object,
@@ -668,8 +671,33 @@ export class HeadingNumberingPlugin extends Plugin {
       | import("./persistence/types.js").PersistedOperation
       | undefined;
     try {
-      const result = await restoreEligibleFiles(operation, dependencies);
-      if (this.disposed || generation !== this.lifecycleGeneration) return;
+      const loaded = await dependencies.journal.load(operationId);
+      if (!this.hasMutationAuthority(token, "recovery", generation)) return;
+      if (
+        !loaded ||
+        loaded.id !== operationId ||
+        !this.isRecoverableOperation(loaded)
+      ) {
+        this.showNotice("notices.recoveryNone");
+        return;
+      }
+      const validation = await validatePersistedOperation(
+        loaded,
+        dependencies.hashText,
+        "restore",
+      );
+      if (!this.hasMutationAuthority(token, "recovery", generation)) return;
+      if (!validation.ok) {
+        this.showNotice("notices.applyRecovery");
+        return;
+      }
+      await inspectRecovery(validation.operation, dependencies);
+      if (!this.hasMutationAuthority(token, "recovery", generation)) return;
+      const result = await restoreEligibleFiles(
+        validation.operation,
+        dependencies,
+      );
+      if (!this.hasMutationAuthority(token, "recovery", generation)) return;
       this.showNotice(
         result.kind === "restored"
           ? "notices.restoreCompleted"
@@ -681,9 +709,7 @@ export class HeadingNumberingPlugin extends Plugin {
         this.showNotice("notices.operationError");
       }
     } finally {
-      if (this.recoveryInFlight.get(operation.id) === token) {
-        this.recoveryInFlight.delete(operation.id);
-      }
+      this.releaseMutationAuthority(token);
     }
     if (nextOperation && !this.disposed) {
       await this.openRecoveryOperation(nextOperation, generation, dependencies);
@@ -712,7 +738,7 @@ export class HeadingNumberingPlugin extends Plugin {
       active.path !== preview.targetPath ||
       !this.vaultAdapter ||
       !this.dataStore ||
-      this.applyInFlight !== null
+      this.mutationAuthority !== null
     ) {
       this.invalidatePersistedPreview();
       this.showNotice("notices.previewInvalidated");
@@ -722,7 +748,8 @@ export class HeadingNumberingPlugin extends Plugin {
     this.previewGeneration += 1;
     this.previewWasInvalidated = false;
     const token = {};
-    this.applyInFlight = { planId: preview.planId, token };
+    this.mutationAuthority = { kind: "apply", token };
+    this.revokeRecoveryModals();
     if (this.previewModal?.planId === preview.planId) {
       const { modal } = this.previewModal;
       this.previewModal = null;
@@ -739,7 +766,7 @@ export class HeadingNumberingPlugin extends Plugin {
       if (!this.disposed) this.showNotice("notices.operationError");
       return;
     } finally {
-      if (this.applyInFlight?.token === token) this.applyInFlight = null;
+      this.releaseMutationAuthority(token);
     }
     if (this.disposed) return;
     if (result.kind === "completed") {
@@ -762,6 +789,40 @@ export class HeadingNumberingPlugin extends Plugin {
     if (this.currentPreview) this.previewWasInvalidated = true;
     this.currentPreview = null;
     this.previewGeneration += 1;
+  }
+
+  private revokeRecoveryModals(): void {
+    this.recoveryNonces.clear();
+    const modals = [...this.recoveryModals.values()];
+    this.recoveryModals.clear();
+    for (const modal of modals) modal.close();
+  }
+
+  private hasMutationAuthority(
+    token: object,
+    kind: "apply" | "recovery",
+    generation: number,
+  ): boolean {
+    return (
+      !this.disposed &&
+      generation === this.lifecycleGeneration &&
+      this.mutationAuthority?.kind === kind &&
+      this.mutationAuthority.token === token
+    );
+  }
+
+  private releaseMutationAuthority(token: object): void {
+    if (this.mutationAuthority?.token === token) {
+      this.mutationAuthority = null;
+    }
+  }
+
+  private isRecoverableOperation(
+    operation: import("./persistence/types.js").PersistedOperation,
+  ): boolean {
+    return ["applying", "recovery-required", "restoring"].includes(
+      operation.state,
+    );
   }
 
   private isPreviewRequestCurrent(

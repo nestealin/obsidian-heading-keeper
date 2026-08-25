@@ -24,6 +24,9 @@ const state = vi.hoisted(() => ({
   settingAvailable: true,
   settingOpens: 0,
   settingTabIds: [] as string[],
+  writeFailures: [] as Array<{ error: Error; path: string }>,
+  writeGates: [] as Array<{ path: string; promise: Promise<void> }>,
+  writeGateHits: [] as string[],
   writes: [] as Array<[string, string]>,
 }));
 
@@ -55,6 +58,23 @@ vi.mock("obsidian", () => {
             .filter((path) => path.endsWith(".md"))
             .map((path) => new TFile(path)),
         modify: async (target: TFile, text: string) => {
+          const failureIndex = state.writeFailures.findIndex(
+            (failure) => failure.path === target.path,
+          );
+          const failure =
+            failureIndex < 0
+              ? undefined
+              : state.writeFailures.splice(failureIndex, 1)[0];
+          if (failure) throw failure.error;
+          const index = state.writeGates.findIndex(
+            (gate) => gate.path === target.path,
+          );
+          const gate =
+            index < 0 ? undefined : state.writeGates.splice(index, 1)[0];
+          if (gate) {
+            state.writeGateHits.push(target.path);
+            await gate.promise;
+          }
           state.writes.push([target.path, text]);
           state.files.set(target.path, text);
         },
@@ -198,6 +218,10 @@ vi.mock("../src/editor-extension.js", () => ({
 
 import { HeadingNumberingPlugin } from "../src/main.js";
 import { sha256Text } from "../src/persistence/plan-service.js";
+import type {
+  PersistedOperation,
+  PersistenceDependencies,
+} from "../src/persistence/types.js";
 
 beforeEach(() => {
   state.activePath = null;
@@ -218,6 +242,9 @@ beforeEach(() => {
   state.settingAvailable = true;
   state.settingOpens = 0;
   state.settingTabIds.length = 0;
+  state.writeFailures.length = 0;
+  state.writeGates.length = 0;
+  state.writeGateHits.length = 0;
   state.writes.length = 0;
 });
 
@@ -594,6 +621,253 @@ describe("persisted plugin workflow", () => {
     expect(state.writes).toEqual([["Target.md", beforeText]]);
   });
 
+  it("revokes an old recovery callback before apply reaches a later link file", async () => {
+    const targetBefore = "## Alpha";
+    const targetAfter = "## 1. Alpha";
+    const recovery = {
+      id: "old-recovery",
+      createdAt: "2026-08-25T00:00:00.000Z",
+      state: "recovery-required" as const,
+      completedPaths: ["Target.md"],
+      files: [
+        {
+          path: "Target.md",
+          beforeText: targetBefore,
+          beforeHash: await sha256Text(targetBefore),
+          afterText: targetAfter,
+          afterHash: await sha256Text(targetAfter),
+          role: "target" as const,
+        },
+      ],
+    };
+    state.activePath = "Target.md";
+    state.files.set("Target.md", targetAfter);
+    state.files.set("Links.md", "[[Target#Alpha]]");
+    state.linkTargets.set("Target", "Target.md");
+    state.loadedData = {
+      settings: { ...DEFAULT_STORED_SETTINGS, mode: "persisted" },
+      journals: { "old-recovery": recovery },
+      latestJournalId: "old-recovery",
+    };
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    await plugin.openRecoveryCenter();
+    const staleRecovery = state.modalButtons.at(-1);
+
+    state.files.set("Target.md", targetBefore);
+    await plugin.previewPersisted("add");
+    const linkGate = deferred<void>();
+    state.writeGates.push({ path: "Links.md", promise: linkGate.promise });
+    const applying = plugin.applyCurrentPreview();
+    await vi.waitFor(() => {
+      expect(state.files.get("Target.md")).toBe(targetAfter);
+    });
+
+    staleRecovery?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(state.files.get("Target.md")).toBe(targetAfter);
+
+    linkGate.resolve(undefined);
+    await applying;
+    expect(state.files.get("Links.md")).toBe("[[Target#1. Alpha]]");
+    expect(state.writes).not.toContainEqual(["Target.md", targetBefore]);
+    const latest = state.savedData.at(-1) as {
+      journals?: Record<
+        string,
+        { files?: Array<{ path: string }>; state?: string }
+      >;
+    };
+    expect(
+      Object.values(latest.journals ?? {}).some(
+        (operation) =>
+          operation.state === "completed" &&
+          operation.files?.some((file) => file.path === "Links.md"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects apply while recovery owns the global mutation authority", async () => {
+    const targetBefore = "## Alpha";
+    const recovery = await recoveryOperation(
+      "other-recovery",
+      "Other.md",
+      "## Other",
+      "## 1. Other",
+    );
+    state.activePath = "Target.md";
+    state.files.set("Target.md", targetBefore);
+    state.files.set("Other.md", recovery.files[0]!.afterText);
+    state.loadedData = {
+      settings: { ...DEFAULT_STORED_SETTINGS, mode: "persisted" },
+      journals: { "other-recovery": recovery },
+      latestJournalId: "other-recovery",
+    };
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    await plugin.previewPersisted("add");
+    await plugin.openRecoveryCenter();
+    const gate = deferred<void>();
+    state.writeGates.push({ path: "Other.md", promise: gate.promise });
+
+    state.modalButtons.at(-1)?.click();
+    await plugin.applyCurrentPreview();
+    expect(state.files.get("Target.md")).toBe(targetBefore);
+
+    gate.resolve(undefined);
+    await vi.waitFor(() => {
+      expect(state.files.get("Other.md")).toBe("## Other");
+    });
+    expect(state.writes).toEqual([["Other.md", "## Other"]]);
+  });
+
+  it("invalidates recovery callbacks from different journals sharing a file", async () => {
+    const afterText = "## Shared";
+    const first = await recoveryOperation(
+      "first-recovery",
+      "Target.md",
+      "## First",
+      afterText,
+    );
+    const second = await recoveryOperation(
+      "second-recovery",
+      "Target.md",
+      "## Second",
+      afterText,
+    );
+    state.files.set("Target.md", afterText);
+    state.loadedData = {
+      settings: { ...DEFAULT_STORED_SETTINGS, mode: "persisted" },
+      journals: {
+        "first-recovery": first,
+        "second-recovery": second,
+      },
+      latestJournalId: "second-recovery",
+    };
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    const access = recoveryAccess(plugin);
+    const dependencies: PersistenceDependencies = {
+      vault: access.vaultAdapter,
+      journal: access.dataStore.journal,
+      hashText: sha256Text,
+    };
+    await access.openRecoveryOperation(first, 0, dependencies);
+    const firstButton = state.modalButtons.at(-1);
+    await access.openRecoveryOperation(second, 0, dependencies);
+    const secondButton = state.modalButtons.at(-1);
+    const gate = deferred<void>();
+    state.writeGates.push({ path: "Target.md", promise: gate.promise });
+
+    firstButton?.click();
+    await vi.waitFor(() => {
+      expect(state.writeGateHits).toEqual(["Target.md"]);
+    });
+    secondButton?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(state.writes).not.toContainEqual(["Target.md", "## Second"]);
+
+    gate.resolve(undefined);
+    await vi.waitFor(() => {
+      expect(state.files.get("Target.md")).toBe("## First");
+    });
+    expect(state.writes).toEqual([["Target.md", "## First"]]);
+  });
+
+  it("does not restore from an old modal after its durable journal completes", async () => {
+    const recovery = await recoveryOperation(
+      "completed-recovery",
+      "Target.md",
+      "## Alpha",
+      "## 1. Alpha",
+    );
+    state.activePath = "Target.md";
+    state.files.set("Target.md", recovery.files[0]!.afterText);
+    state.loadedData = {
+      settings: { ...DEFAULT_STORED_SETTINGS, mode: "persisted" },
+      journals: { "completed-recovery": recovery },
+      latestJournalId: "completed-recovery",
+    };
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    await plugin.openRecoveryCenter();
+    const staleRecovery = state.modalButtons.at(-1);
+    const access = recoveryAccess(plugin);
+    await access.dataStore.journal.save({
+      ...recovery,
+      state: "completed",
+      completedPaths: ["Target.md"],
+    });
+
+    staleRecovery?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(state.files.get("Target.md")).toBe("## 1. Alpha");
+    expect(state.writes).toEqual([]);
+  });
+
+  it("releases recovery authority after a restore failure", async () => {
+    const recovery = await recoveryOperation(
+      "failed-recovery",
+      "Other.md",
+      "## Other",
+      "## 1. Other",
+    );
+    state.activePath = "Target.md";
+    state.files.set("Target.md", "## Alpha");
+    state.files.set("Other.md", recovery.files[0]!.afterText);
+    state.loadedData = {
+      settings: { ...DEFAULT_STORED_SETTINGS, mode: "persisted" },
+      journals: { "failed-recovery": recovery },
+      latestJournalId: "failed-recovery",
+    };
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    await plugin.previewPersisted("add");
+    await plugin.openRecoveryCenter();
+    state.writeFailures.push({
+      path: "Other.md",
+      error: new Error("private restore detail"),
+    });
+
+    state.modalButtons.at(-1)?.click();
+    await vi.waitFor(() => {
+      expect(state.notices.at(-1)).toBe(
+        "Writing stopped. Open recovery before continuing.",
+      );
+    });
+    await plugin.applyCurrentPreview();
+
+    expect(state.files.get("Target.md")).toBe("## 1. Alpha");
+    expect(state.notices.join("\n")).not.toContain("private restore detail");
+  });
+
+  it("invalidates a recovery callback after unload", async () => {
+    const recovery = await recoveryOperation(
+      "unloaded-recovery",
+      "Target.md",
+      "## Alpha",
+      "## 1. Alpha",
+    );
+    state.activePath = "Target.md";
+    state.files.set("Target.md", recovery.files[0]!.afterText);
+    state.loadedData = {
+      settings: { ...DEFAULT_STORED_SETTINGS, mode: "persisted" },
+      journals: { "unloaded-recovery": recovery },
+      latestJournalId: "unloaded-recovery",
+    };
+    const plugin = new HeadingNumberingPlugin();
+    await plugin.onload();
+    await plugin.openRecoveryCenter();
+    const staleRecovery = state.modalButtons.at(-1);
+
+    plugin.onunload();
+    staleRecovery?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(state.files.get("Target.md")).toBe("## 1. Alpha");
+    expect(state.writes).toEqual([]);
+  });
+
   it("finalizes an all-pending recovery with zero vault writes", async () => {
     const beforeText = "## Alpha";
     const afterText = "## 1. Alpha";
@@ -662,4 +936,48 @@ function deferred<T>() {
     resolve = fulfill;
   });
   return { promise, resolve };
+}
+
+async function recoveryOperation(
+  id: string,
+  path: string,
+  beforeText: string,
+  afterText: string,
+): Promise<PersistedOperation> {
+  return {
+    id,
+    createdAt: "2026-08-25T00:00:00.000Z",
+    state: "recovery-required",
+    completedPaths: [path],
+    files: [
+      {
+        path,
+        beforeText,
+        beforeHash: await sha256Text(beforeText),
+        afterText,
+        afterHash: await sha256Text(afterText),
+        role: "target",
+      },
+    ],
+  };
+}
+
+function recoveryAccess(plugin: HeadingNumberingPlugin): {
+  dataStore: { journal: PersistenceDependencies["journal"] };
+  openRecoveryOperation(
+    operation: PersistedOperation,
+    generation: number,
+    dependencies: PersistenceDependencies,
+  ): Promise<void>;
+  vaultAdapter: PersistenceDependencies["vault"];
+} {
+  return plugin as unknown as {
+    dataStore: { journal: PersistenceDependencies["journal"] };
+    openRecoveryOperation(
+      operation: PersistedOperation,
+      generation: number,
+      dependencies: PersistenceDependencies,
+    ): Promise<void>;
+    vaultAdapter: PersistenceDependencies["vault"];
+  };
 }
