@@ -28,6 +28,7 @@ export function createObsidianLinkResolver(
   metadataCache: MetadataSurface,
 ): (sourcePath: string, linkPath: string) => ResolvedTarget {
   return (sourcePath, linkPath) => {
+    if (linkPath === "") return { kind: "file", path: sourcePath };
     const file = metadataCache.getFirstLinkpathDest(linkPath, sourcePath);
     return file instanceof TFile
       ? { kind: "file", path: file.path }

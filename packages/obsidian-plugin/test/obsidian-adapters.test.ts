@@ -36,7 +36,7 @@ describe("Obsidian adapters", () => {
     expect(state.modified).toEqual([["A.md", "changed"]]);
   });
 
-  it("resolves file identity only through getFirstLinkpathDest", () => {
+  it("resolves same-file fragments directly and other files through metadata", () => {
     const calls: Array<[string, string]> = [];
     const target = new TFile("Folder/Target.md");
     const resolver = createObsidianLinkResolver({
@@ -49,6 +49,10 @@ describe("Obsidian adapters", () => {
     expect(resolver("Source.md", "Target")).toEqual({
       kind: "file",
       path: "Folder/Target.md",
+    });
+    expect(resolver("Folder/Source.md", "")).toEqual({
+      kind: "file",
+      path: "Folder/Source.md",
     });
     expect(resolver("Source.md", "Missing")).toEqual({ kind: "missing" });
     expect(calls).toEqual([
