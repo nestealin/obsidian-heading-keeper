@@ -24,6 +24,7 @@ function targetInput(beforeText: string) {
       scanHeadings(beforeText),
       DEFAULT_SETTINGS,
     ),
+    numberingMaterialization: "insert" as const,
     linkEdits: [],
   };
 }
@@ -41,6 +42,7 @@ describe("buildPersistedOperation", () => {
             scanHeadings(beforeText),
             DEFAULT_SETTINGS,
           ),
+          numberingMaterialization: "insert",
           linkEdits: [],
         },
         linkSources: [],
@@ -229,6 +231,31 @@ describe("buildPersistedOperation", () => {
         dependencies,
       ),
     ).rejects.toBeInstanceOf(PersistedPlanError);
+  });
+
+  it("validates numbering without materializing insertions for remove plans", async () => {
+    const beforeText = "## 1. Alpha\n## Beta\n";
+    const result = await buildPersistedOperation(
+      {
+        target: {
+          ...targetInput(beforeText),
+          numberingMaterialization: "validate-only",
+          linkEdits: [
+            {
+              range: { from: 3, to: 6 },
+              expectedText: "1. ",
+              replacementText: "",
+            },
+          ],
+        },
+        linkSources: [],
+      },
+      dependencies,
+    );
+
+    expect(result.kind).toBe("operation");
+    if (result.kind !== "operation") return;
+    expect(result.operation.files[0]?.afterText).toBe("## Alpha\n## Beta\n");
   });
 
   it("rejects forged target plans", async () => {

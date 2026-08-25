@@ -128,8 +128,16 @@ export async function buildPersistedOperation(
   const targetNumberingEdits = input.target.numberingPlan.entries.flatMap(
     (entry) => (entry.edit ? [copiedEdit(entry.edit)] : []),
   );
+  if (
+    input.target.numberingMaterialization !== "insert" &&
+    input.target.numberingMaterialization !== "validate-only"
+  ) {
+    throw new PersistedPlanError("invalid-target-plan");
+  }
   const targetNumberingInsertions =
-    targetNumberingEdits.map(prefixInsertionEdit);
+    input.target.numberingMaterialization === "insert"
+      ? targetNumberingEdits.map(prefixInsertionEdit)
+      : [];
   const files = new Map<string, MutableFilePlan>();
   files.set(targetPath, {
     path: targetPath,
@@ -176,6 +184,7 @@ export async function buildPersistedOperation(
   // replay only the verified prefix insertion so nested heading-link edits can
   // compose without weakening the complete-plan check.
   if (
+    input.target.numberingMaterialization === "insert" &&
     applyVerifiedEdits(targetBefore, targetNumberingInsertions) !== targetAfter
   ) {
     throw new PersistedPlanError("invalid-target-plan");

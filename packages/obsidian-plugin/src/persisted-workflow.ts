@@ -264,6 +264,8 @@ export async function buildWorkflowPreview(
         path: input.targetPath,
         beforeText: target.text,
         numberingPlan,
+        numberingMaterialization:
+          input.kind === "add" ? "insert" : "validate-only",
         linkEdits: input.kind === "remove" ? removal.edits : [],
       },
       linkSources,

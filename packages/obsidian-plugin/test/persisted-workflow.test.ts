@@ -369,6 +369,55 @@ describe("buildWorkflowPreview", () => {
     );
   });
 
+  it("does not materialize add edits while removing mixed heading ownership", async () => {
+    const beforeText = [
+      "# Outside",
+      "## 1. Alpha",
+      "## Beta",
+      "## 2026. Roadmap",
+      "## 9. Old candidate",
+    ].join("\n");
+    const result = await buildWorkflowPreview(
+      {
+        kind: "remove",
+        targetPath: "Target.md",
+        sources: [{ path: "Target.md", text: beforeText }],
+        settings,
+        resolveTarget: () => ({ kind: "file", path: "Target.md" }),
+      },
+      deps,
+    );
+
+    expect(result.kind).toBe("preview");
+    if (result.kind !== "preview") return;
+    expect(result.groups.targetEdits).toEqual([
+      {
+        range: { from: 13, to: 16 },
+        expectedText: "1. ",
+        replacementText: "",
+      },
+    ]);
+    expect(result.operation.files).toHaveLength(1);
+    expect(result.operation.files[0]?.afterText).toBe(
+      [
+        "# Outside",
+        "## Alpha",
+        "## Beta",
+        "## 2026. Roadmap",
+        "## 9. Old candidate",
+      ].join("\n"),
+    );
+    expect(result.groups.preserved).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "semantic-prefix" }),
+        expect.objectContaining({ code: "ambiguous-prefix" }),
+      ]),
+    );
+    expect(result.groups.skips).toEqual([
+      expect.objectContaining({ code: "heading-outside-range" }),
+    ]);
+  });
+
   it("uses stable skip codes instead of planner sentences", async () => {
     const result = await buildWorkflowPreview(
       {

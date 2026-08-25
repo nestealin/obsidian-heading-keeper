@@ -49,6 +49,7 @@ export interface TargetPlanInput {
   readonly path: string;
   readonly beforeText: string;
   readonly numberingPlan: NumberingPlan;
+  readonly numberingMaterialization: "insert" | "validate-only";
   readonly linkEdits: readonly PlannedTextEdit[];
 }
 
