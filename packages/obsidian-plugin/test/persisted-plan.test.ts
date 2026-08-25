@@ -2,9 +2,10 @@ import {
   buildNumberingPlan,
   DEFAULT_SETTINGS,
   scanHeadings,
-} from "@heading-numbering/core";
+} from "@heading-keeper/core";
 import { describe, expect, it } from "vitest";
 import {
+  buildLinkOnlyOperation,
   buildPersistedOperation,
   PersistedPlanError,
   sha256Text,
@@ -305,5 +306,68 @@ describe("buildPersistedOperation", () => {
     await expect(sha256Text("中文 🐙\r\n")).resolves.toBe(
       "bd2326ac7d5e1ab81d811c5f869d23334a3964beda51e7109d0b4118ef7b3549",
     );
+  });
+});
+
+describe("buildLinkOnlyOperation", () => {
+  it("builds a sorted journaled operation without rewriting a target file", async () => {
+    const result = await buildLinkOnlyOperation(
+      {
+        linkSources: ["z.md", "a.md"].map((path) => ({
+          path,
+          beforeText: "[[Target#Old]]",
+          edits: [
+            {
+              range: { from: 9, to: 12 },
+              expectedText: "Old",
+              replacementText: "New",
+            },
+          ],
+        })),
+      },
+      dependencies,
+    );
+
+    expect(result.kind).toBe("operation");
+    if (result.kind !== "operation") return;
+    expect(result.operation.files).toEqual([
+      expect.objectContaining({
+        path: "a.md",
+        role: "link-source",
+        afterText: "[[Target#New]]",
+      }),
+      expect.objectContaining({
+        path: "z.md",
+        role: "link-source",
+        afterText: "[[Target#New]]",
+      }),
+    ]);
+    expect(result.operation.files.some((file) => file.role === "target")).toBe(
+      false,
+    );
+  });
+
+  it("returns no-op without allocating identity for empty link changes", async () => {
+    let calls = 0;
+    await expect(
+      buildLinkOnlyOperation(
+        { linkSources: [] },
+        {
+          createId: () => {
+            calls += 1;
+            return "unused";
+          },
+          now: () => {
+            calls += 1;
+            return "unused";
+          },
+          hashText: async () => {
+            calls += 1;
+            return "unused";
+          },
+        },
+      ),
+    ).resolves.toEqual({ kind: "no-op" });
+    expect(calls).toBe(0);
   });
 });

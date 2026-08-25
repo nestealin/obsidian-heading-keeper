@@ -1,4 +1,4 @@
-import type { FieldError } from "@heading-numbering/core";
+import type { FieldError } from "@heading-keeper/core";
 import { snapshotOperation } from "./persistence/journal.js";
 import { validatePersistedOperation } from "./persistence/operation-validator.js";
 import type {

@@ -1,4 +1,4 @@
-import type { NumberingPlan, SourceRange } from "@heading-numbering/core";
+import type { NumberingPlan, SourceRange } from "@heading-keeper/core";
 
 export type OperationState =
   | "previewed"

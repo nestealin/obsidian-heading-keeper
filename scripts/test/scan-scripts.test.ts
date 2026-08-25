@@ -24,7 +24,7 @@ afterEach(async () => {
 });
 
 async function createGitFixture(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "heading-numbering-scan-"));
+  const directory = await mkdtemp(join(tmpdir(), "heading-keeper-scan-"));
   temporaryDirectories.push(directory);
   execFileSync("git", ["init", "--quiet"], { cwd: directory });
   return directory;
@@ -143,7 +143,7 @@ describe("source scan scripts", () => {
 
   it("surfaces a git failure", async () => {
     const directory = await mkdtemp(
-      join(tmpdir(), "heading-numbering-scan-no-git-"),
+      join(tmpdir(), "heading-keeper-scan-no-git-"),
     );
     temporaryDirectories.push(directory);
 

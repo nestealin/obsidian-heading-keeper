@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_STORED_SETTINGS } from "../src/settings.js";
 import {
-  createHeadingNumberingExtension,
+  createHeadingKeeperExtension,
   planEditorDecorations,
 } from "../src/editor-extension.js";
 
@@ -39,7 +39,7 @@ describe("editor virtual decorations", () => {
 
   it("creates a decoration-only CodeMirror extension", () => {
     expect(
-      createHeadingNumberingExtension(() => DEFAULT_STORED_SETTINGS),
+      createHeadingKeeperExtension(() => DEFAULT_STORED_SETTINGS),
     ).toBeTruthy();
   });
 });

@@ -56,7 +56,7 @@ vi.mock("obsidian", () => {
         on: () => ({}),
       },
     };
-    manifest = { id: "heading-numbering" };
+    manifest = { id: "heading-keeper" };
 
     addCommand(command: { id: string; callback?: () => void }) {
       state.commands.push(command);
@@ -169,6 +169,12 @@ vi.mock("obsidian", () => {
       callback(new ButtonComponent());
       return this;
     }
+
+    addToggle(callback: (component: ToggleComponent) => void) {
+      this.row.controls.push("toggle");
+      callback(new ToggleComponent());
+      return this;
+    }
   }
 
   class Dropdown {
@@ -189,6 +195,19 @@ vi.mock("obsidian", () => {
   class TextComponent {
     onChange(callback: (value: string) => void | Promise<void>) {
       state.settingChanges.push(callback);
+      return this;
+    }
+
+    setValue() {
+      return this;
+    }
+  }
+
+  class ToggleComponent {
+    onChange(callback: (value: boolean) => void | Promise<void>) {
+      state.settingChanges.push(
+        callback as unknown as (value: string) => void | Promise<void>,
+      );
       return this;
     }
 
@@ -218,13 +237,13 @@ vi.mock("obsidian", () => {
 });
 
 vi.mock("../src/editor-extension.js", () => ({
-  createHeadingNumberingExtension: () => ({}),
-  refreshHeadingNumberingExtensions: () => {
+  createHeadingKeeperExtension: () => ({}),
+  refreshHeadingKeeperExtensions: () => {
     state.editorRefreshes += 1;
   },
 }));
 
-import { HeadingNumberingPlugin } from "../src/main.js";
+import { HeadingKeeperPlugin } from "../src/main.js";
 
 beforeEach(() => {
   state.commands.length = 0;
@@ -245,9 +264,9 @@ beforeEach(() => {
   state.vaultWrites = 0;
 });
 
-describe("HeadingNumberingPlugin", () => {
-  it("loads virtual defaults and registers only the five stable commands", async () => {
-    const plugin = new HeadingNumberingPlugin();
+describe("HeadingKeeperPlugin", () => {
+  it("loads virtual defaults and registers the six stable commands", async () => {
+    const plugin = new HeadingKeeperPlugin();
 
     await plugin.onload();
 
@@ -262,6 +281,7 @@ describe("HeadingNumberingPlugin", () => {
       "apply-persisted",
       "remove-confirmed",
       "refresh-virtual",
+      "audit-heading-links",
       "open-settings",
     ]);
     expect(state.settingTabs).toHaveLength(1);
@@ -272,7 +292,7 @@ describe("HeadingNumberingPlugin", () => {
 
   it("keeps the last valid settings and exposes field errors when persisted data is invalid", async () => {
     state.loadedData = { ...DEFAULT_STORED_SETTINGS, topLevel: 0 };
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
 
     await plugin.onload();
 
@@ -283,7 +303,7 @@ describe("HeadingNumberingPlugin", () => {
   });
 
   it("saves only valid settings and leaves vault writes to later explicit operations", async () => {
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
 
     await expect(
@@ -305,7 +325,7 @@ describe("HeadingNumberingPlugin", () => {
   });
 
   it("saves every settings field and restores the saved value after reload", async () => {
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     const updates = [
       { mode: "persisted" },
@@ -325,7 +345,7 @@ describe("HeadingNumberingPlugin", () => {
     }
 
     state.loadedData = state.savedData.at(-1);
-    const reloaded = new HeadingNumberingPlugin();
+    const reloaded = new HeadingKeeperPlugin();
     await reloaded.onload();
 
     expect(reloaded.settings).toEqual({
@@ -337,11 +357,12 @@ describe("HeadingNumberingPlugin", () => {
       gapStrategy: "skip",
       mode: "persisted",
       locale: "zh",
+      updateHeadingLinks: true,
     });
   });
 
   it("retains the last valid mode when an invalid mode is saved", async () => {
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     await plugin.saveSettings({ ...plugin.settings, mode: "persisted" });
 
@@ -356,7 +377,7 @@ describe("HeadingNumberingPlugin", () => {
   });
 
   it("renders controls and descriptions for every stored setting", async () => {
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     const tab = state.settingTabs[0] as { display: () => void };
 
@@ -364,6 +385,7 @@ describe("HeadingNumberingPlugin", () => {
 
     expect(state.settingRows.map((row) => row.name)).toEqual([
       "Numbering mode",
+      "Keep heading links updated",
       "Top heading level",
       "Bottom heading level",
       "Start at",
@@ -379,12 +401,12 @@ describe("HeadingNumberingPlugin", () => {
   });
 
   it("merges two rapid SettingTab control changes against committed settings", async () => {
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     const tab = state.settingTabs[0] as { display: () => void };
     tab.display();
     const modeChange = state.settingChanges[0];
-    const topLevelChange = state.settingChanges[1];
+    const topLevelChange = state.settingChanges[2];
 
     await Promise.all([modeChange?.("persisted"), topLevelChange?.("3")]);
 
@@ -398,7 +420,7 @@ describe("HeadingNumberingPlugin", () => {
   it("refreshes owned Reading prefixes on settings changes and cleans them on unload", async () => {
     const root = createReadingRoot(2);
     state.readingMarkdown.set("virtual.md", "## Root");
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     const processor = state.postProcessors[0] as (
       root: HTMLElement,
@@ -420,7 +442,7 @@ describe("HeadingNumberingPlugin", () => {
     const firstRoot = createReadingRoot(2);
     const secondRoot = createReadingRoot(2);
     state.readingMarkdown.set("virtual.md", "## A\n## B");
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     const processor = state.postProcessors[0] as (
       root: HTMLElement,
@@ -444,7 +466,7 @@ describe("HeadingNumberingPlugin", () => {
     const root = createReadingRoot(2);
     const delayed = deferred<string>();
     state.readQueue.push(delayed.promise);
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     const processor = state.postProcessors[0] as (
       root: HTMLElement,
@@ -469,7 +491,7 @@ describe("HeadingNumberingPlugin", () => {
     const root = createReadingRoot(2);
     const delayed = deferred<string>();
     state.readQueue.push(delayed.promise);
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     const processor = state.postProcessors[0] as (
       root: HTMLElement,
@@ -492,7 +514,7 @@ describe("HeadingNumberingPlugin", () => {
     const firstRead = deferred<string>();
     const secondRead = deferred<string>();
     state.readQueue.push(firstRead.promise, secondRead.promise);
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     const processor = state.postProcessors[0] as (
       root: HTMLElement,
@@ -518,7 +540,7 @@ describe("HeadingNumberingPlugin", () => {
       parent.appendChild(child);
       state.readingMarkdown.set("Parent.md", "## Parent\n![[Child]]");
       state.readingMarkdown.set("Child.md", "## Child");
-      const plugin = new HeadingNumberingPlugin();
+      const plugin = new HeadingKeeperPlugin();
       await plugin.onload();
       const processor = state.postProcessors.at(-1) as (
         root: HTMLElement,
@@ -556,7 +578,7 @@ describe("HeadingNumberingPlugin", () => {
       createReadingRoot(2),
     ];
     state.readingMarkdown.set("many.md", "## A\n## B\n## C");
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     const processor = state.postProcessors.at(-1) as (
       root: HTMLElement,
@@ -587,7 +609,7 @@ describe("HeadingNumberingPlugin", () => {
         "\n",
       ),
     );
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     const processor = state.postProcessors.at(-1) as (
       root: HTMLElement,
@@ -614,7 +636,7 @@ describe("HeadingNumberingPlugin", () => {
     state.readingMarkdown.set("Parent.md", "## Parent\n![[Child]]");
     state.readingMarkdown.set("Child.md", "## Child");
     state.readingMarkdown.set("Sibling.md", "## Sibling");
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     const processor = state.postProcessors.at(-1) as (
       root: HTMLElement,
@@ -655,7 +677,7 @@ describe("HeadingNumberingPlugin", () => {
       "nested.md",
       "## Grandparent\n### Parent\n#### Child",
     );
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     const processor = state.postProcessors.at(-1) as (
       root: HTMLElement,
@@ -762,8 +784,8 @@ function createReadingRoot(level: number) {
         for (const child of node.children) {
           if (
             (headingSelector && /^H[1-6]$/.test(child.tagName)) ||
-            (selector === ".heading-numbering-prefix" &&
-              child.className === "heading-numbering-prefix")
+            (selector === ".heading-keeper-prefix" &&
+              child.className === "heading-keeper-prefix")
           ) {
             result.push(child);
           }
@@ -775,7 +797,7 @@ function createReadingRoot(level: number) {
     }
 
     prefixes(): string[] {
-      return this.querySelectorAll(".heading-numbering-prefix").map(
+      return this.querySelectorAll(".heading-keeper-prefix").map(
         (prefix) => prefix.textContent,
       );
     }

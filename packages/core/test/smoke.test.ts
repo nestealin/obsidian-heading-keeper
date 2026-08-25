@@ -4,7 +4,7 @@ import { packageIdentity } from "../src/index.js";
 describe("packageIdentity", () => {
   it("exposes the stable plugin identity", () => {
     expect(packageIdentity).toEqual({
-      id: "heading-numbering",
+      id: "heading-keeper",
       version: "0.1.0",
     });
   });

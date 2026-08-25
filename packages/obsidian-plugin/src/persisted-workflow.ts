@@ -3,13 +3,13 @@ import {
   scanHeadings,
   type NumberingPlan,
   type NumberingPlanEntry,
-} from "@heading-numbering/core";
+} from "@heading-keeper/core";
 import {
   planRenameScopedLinkChanges,
   type HeadingRename,
   type LinkDiagnosticCode,
   type ResolvedTarget,
-} from "@heading-numbering/link-core";
+} from "@heading-keeper/link-core";
 import { buildPersistedOperation } from "./persistence/plan-service.js";
 import type {
   BuildPersistedOperationDependencies,

@@ -3,7 +3,7 @@ import {
   validateSettings,
   type FieldError,
   type NumberingSettings,
-} from "@heading-numbering/core";
+} from "@heading-keeper/core";
 import type { LocalePreference } from "./i18n.js";
 
 export type NumberingMode = "virtual" | "persisted";
@@ -11,6 +11,7 @@ export type NumberingMode = "virtual" | "persisted";
 export interface StoredSettings extends NumberingSettings {
   mode: NumberingMode;
   locale: LocalePreference;
+  updateHeadingLinks: boolean;
 }
 
 export type StoredSettingsValidation =
@@ -21,6 +22,7 @@ export const DEFAULT_STORED_SETTINGS: Readonly<StoredSettings> = Object.freeze({
   ...DEFAULT_SETTINGS,
   mode: "virtual",
   locale: "auto",
+  updateHeadingLinks: true,
 });
 
 function readOwnValue(input: unknown, field: string): unknown {
@@ -50,6 +52,11 @@ function readOwnMode(input: unknown): NumberingMode | undefined {
   return value === "virtual" || value === "persisted" ? value : undefined;
 }
 
+function readOwnUpdateHeadingLinks(input: unknown): boolean | undefined {
+  const value = readOwnValue(input, "updateHeadingLinks");
+  return typeof value === "boolean" ? value : undefined;
+}
+
 export function validateStoredSettings(
   input: unknown,
 ): StoredSettingsValidation {
@@ -74,5 +81,20 @@ export function validateStoredSettings(
     };
   }
 
-  return { ok: true, value: { ...numbering.value, mode, locale } };
+  const rawUpdateHeadingLinks = readOwnValue(input, "updateHeadingLinks");
+  const updateHeadingLinks =
+    rawUpdateHeadingLinks === undefined
+      ? true
+      : readOwnUpdateHeadingLinks(input);
+  if (updateHeadingLinks === undefined) {
+    return {
+      ok: false,
+      errors: [{ field: "updateHeadingLinks", message: "Expected a boolean." }],
+    };
+  }
+
+  return {
+    ok: true,
+    value: { ...numbering.value, mode, locale, updateHeadingLinks },
+  };
 }

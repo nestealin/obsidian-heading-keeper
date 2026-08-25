@@ -10,7 +10,7 @@ const repositoryRoot = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "../..",
 );
-const artifact = join(repositoryRoot, "artifacts/heading-numbering-0.1.0.zip");
+const artifact = join(repositoryRoot, "artifacts/heading-keeper-0.1.0.zip");
 const packageScript = join(repositoryRoot, "scripts/package-plugin.mjs");
 const releaseRejectedScript = join(
   repositoryRoot,
@@ -115,7 +115,7 @@ function parseZipEntries(content: Buffer) {
 }
 
 async function deploymentDirectory(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "heading-numbering-deploy-"));
+  const directory = await mkdtemp(join(tmpdir(), "heading-keeper-deploy-"));
   temporaryDirectories.push(directory);
   for (const name of ["main.js", "manifest.json", "versions.json"]) {
     await cp(join(pluginDirectory, name), join(directory, name));
@@ -158,7 +158,7 @@ describe("release surface", () => {
     expect(absent.stdout).toContain("skipped");
 
     const detected = run(releaseRejectedScript, [], {
-      REJECTED_TERMS_JSON: JSON.stringify(["heading-numbering"]),
+      REJECTED_TERMS_JSON: JSON.stringify(["heading-keeper"]),
     });
     expect(detected.status).toBe(1);
   });
@@ -166,7 +166,7 @@ describe("release surface", () => {
   it("keeps the bundled release identity and runtime surface constrained", () => {
     execFileSync(
       "corepack",
-      ["pnpm", "--filter", "@heading-numbering/obsidian-plugin", "build"],
+      ["pnpm", "--filter", "@heading-keeper/obsidian-plugin", "build"],
       {
         cwd: repositoryRoot,
       },
@@ -219,7 +219,7 @@ describe("release surface", () => {
   it("verifies byte-identical deployment assets while allowing data.json", async () => {
     execFileSync(
       "corepack",
-      ["pnpm", "--filter", "@heading-numbering/obsidian-plugin", "build"],
+      ["pnpm", "--filter", "@heading-keeper/obsidian-plugin", "build"],
       {
         cwd: repositoryRoot,
       },
@@ -237,7 +237,7 @@ describe("release surface", () => {
   it("rejects incomplete, non-file, and every non-allowlisted deployment entry", async () => {
     execFileSync(
       "corepack",
-      ["pnpm", "--filter", "@heading-numbering/obsidian-plugin", "build"],
+      ["pnpm", "--filter", "@heading-keeper/obsidian-plugin", "build"],
       {
         cwd: repositoryRoot,
       },
@@ -270,10 +270,10 @@ describe("release surface", () => {
   });
 
   it("rejects nonexistent and non-directory deployment paths", async () => {
-    const missing = join(tmpdir(), "heading-numbering-deploy-does-not-exist");
+    const missing = join(tmpdir(), "heading-keeper-deploy-does-not-exist");
     expect(run(verifyDeploymentScript, [missing]).status).toBe(1);
 
-    const directory = await mkdtemp(join(tmpdir(), "heading-numbering-file-"));
+    const directory = await mkdtemp(join(tmpdir(), "heading-keeper-file-"));
     temporaryDirectories.push(directory);
     const file = join(directory, "not-a-directory");
     await writeFile(file, "release target");

@@ -8,6 +8,8 @@ export type TranslationKey =
   | "settings.heading"
   | "settings.mode"
   | "settings.modeDescription"
+  | "settings.updateHeadingLinks"
+  | "settings.updateHeadingLinksDescription"
   | "settings.topLevel"
   | "settings.topLevelDescription"
   | "settings.bottomLevel"
@@ -28,6 +30,7 @@ export type TranslationKey =
   | "commands.apply"
   | "commands.remove"
   | "commands.refresh"
+  | "commands.audit"
   | "commands.openSettings"
   | "notices.refresh"
   | "notices.openSettings"
@@ -46,6 +49,13 @@ export type TranslationKey =
   | "notices.recoveryAvailable"
   | "notices.recoveryNone"
   | "notices.restoreCompleted"
+  | "notices.linkSyncCompleted"
+  | "notices.linkSyncSkipped"
+  | "notices.linkSyncStale"
+  | "notices.auditCompleted"
+  | "modal.audit.aria"
+  | "modal.audit.heading"
+  | "modal.audit.noFindings"
   | "modal.preview.aria"
   | "modal.preview.target"
   | "modal.preview.links"
@@ -97,10 +107,13 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     "locale.auto": "Auto",
     "locale.en": "English",
     "locale.zh": "中文",
-    "settings.heading": "Heading Numbering",
+    "settings.heading": "Heading Keeper",
     "settings.mode": "Numbering mode",
     "settings.modeDescription":
       "Persisted mode only enables explicit preview, apply, and remove actions. It never writes in the background.",
+    "settings.updateHeadingLinks": "Keep heading links updated",
+    "settings.updateHeadingLinksDescription":
+      "Update resolved heading-fragment links after one uniquely provable saved heading rename. Ambiguous changes are preserved.",
     "settings.topLevel": "Top heading level",
     "settings.topLevelDescription":
       "First heading level included in numbering (1 through 6).",
@@ -127,10 +140,11 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     "commands.apply": "Apply persisted numbering",
     "commands.remove": "Remove persisted numbering",
     "commands.refresh": "Refresh virtual numbering",
-    "commands.openSettings": "Open Heading Numbering settings",
+    "commands.audit": "Audit heading links",
+    "commands.openSettings": "Open Heading Keeper settings",
     "notices.refresh": "Virtual numbering refreshed.",
     "notices.openSettings":
-      "Open Obsidian Settings to configure Heading Numbering.",
+      "Open Obsidian Settings to configure Heading Keeper.",
     "notices.persistedModeRequired": "Switch to persisted mode first.",
     "notices.activeMarkdownRequired": "Open an active Markdown file first.",
     "notices.previewReady": "Persisted preview is ready for confirmation.",
@@ -147,6 +161,15 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     "notices.recoveryAvailable": "A persisted operation requires recovery.",
     "notices.recoveryNone": "No persisted operation requires recovery.",
     "notices.restoreCompleted": "Eligible files were restored.",
+    "notices.linkSyncCompleted": "Heading links updated.",
+    "notices.linkSyncSkipped":
+      "Heading links were preserved because the rename was not unique.",
+    "notices.linkSyncStale":
+      "Heading links changed concurrently; no automatic update was applied.",
+    "notices.auditCompleted": "Heading-link audit completed.",
+    "modal.audit.aria": "Heading-link audit results",
+    "modal.audit.heading": "Heading-link audit",
+    "modal.audit.noFindings": "No heading-link issues were found.",
     "modal.preview.aria": "Persisted numbering preview",
     "modal.preview.target": "Target heading edits",
     "modal.preview.links": "Link edits",
@@ -209,6 +232,9 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     "settings.mode": "编号模式",
     "settings.modeDescription":
       "写入模式只启用明确的预览、写入和移除操作，绝不会在后台写入。",
+    "settings.updateHeadingLinks": "同步标题链接",
+    "settings.updateHeadingLinksDescription":
+      "保存后仅在单个标题重命名可被唯一证明时更新已解析的标题片段链接；歧义变更保持不动。",
     "settings.topLevel": "起始标题层级",
     "settings.topLevelDescription": "参与编号的第一个标题层级（1 到 6）。",
     "settings.bottomLevel": "结束标题层级",
@@ -230,6 +256,7 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     "commands.apply": "写入编号",
     "commands.remove": "移除已写入编号",
     "commands.refresh": "刷新虚拟编号",
+    "commands.audit": "审计标题链接",
     "commands.openSettings": "打开标题编号设置",
     "notices.refresh": "虚拟编号已刷新。",
     "notices.openSettings": "请在 Obsidian 设置中配置标题编号。",
@@ -248,6 +275,13 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     "notices.recoveryAvailable": "存在需要恢复的写入事务。",
     "notices.recoveryNone": "当前没有需要恢复的写入事务。",
     "notices.restoreCompleted": "可恢复文件已还原。",
+    "notices.linkSyncCompleted": "标题链接已同步更新。",
+    "notices.linkSyncSkipped": "标题重命名无法唯一确认，相关链接保持不变。",
+    "notices.linkSyncStale": "链接来源已并发变化，本次未执行自动更新。",
+    "notices.auditCompleted": "标题链接审计已完成。",
+    "modal.audit.aria": "标题链接审计结果",
+    "modal.audit.heading": "标题链接审计",
+    "modal.audit.noFindings": "未发现标题链接问题。",
     "modal.preview.aria": "标题编号写入预览",
     "modal.preview.target": "目标标题编辑",
     "modal.preview.links": "链接编辑",

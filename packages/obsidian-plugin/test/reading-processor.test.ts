@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_STORED_SETTINGS } from "../src/settings.js";
 import {
-  clearHeadingNumberingPrefixes,
+  clearHeadingKeeperPrefixes,
   decorateReadingHeadings,
   planReadingDecorations,
   registerReadingRoot,
@@ -59,12 +59,12 @@ class FakeElement {
 
   querySelectorAll(selector: string): FakeElement[] {
     const expectedTags = selector.split(", ").map((item) => item.toUpperCase());
-    const matchesPrefix = selector === ".heading-numbering-prefix";
+    const matchesPrefix = selector === ".heading-keeper-prefix";
     const result: FakeElement[] = [];
     const visit = (node: FakeElement): void => {
       for (const child of node.children) {
         if (
-          (matchesPrefix && child.className === "heading-numbering-prefix") ||
+          (matchesPrefix && child.className === "heading-keeper-prefix") ||
           (!matchesPrefix && expectedTags.includes(child.tagName))
         ) {
           result.push(child);
@@ -211,7 +211,7 @@ describe("Reading virtual decorations", () => {
       { lineEnd: 1, lineStart: 0 },
     );
 
-    const prefixes = root.querySelectorAll(".heading-numbering-prefix");
+    const prefixes = root.querySelectorAll(".heading-keeper-prefix");
     expect(prefixes).toHaveLength(2);
     expect(prefixes.map((span) => span.textContent)).toEqual(["1. ", "1.1. "]);
     expect(
@@ -238,14 +238,14 @@ describe("Reading virtual decorations", () => {
         },
       ],
     });
-    expect(root.querySelectorAll(".heading-numbering-prefix")).toHaveLength(0);
+    expect(root.querySelectorAll(".heading-keeper-prefix")).toHaveLength(0);
   });
 
   it("keeps user spans sharing the public class while replacing only owned spans", () => {
     const root = readingRoot([2]);
     const heading = root.children[0];
     const userPrefix = new FakeElement("SPAN");
-    userPrefix.className = "heading-numbering-prefix";
+    userPrefix.className = "heading-keeper-prefix";
     heading?.appendChild(userPrefix);
 
     decorateReadingHeadings(
@@ -254,7 +254,7 @@ describe("Reading virtual decorations", () => {
       DEFAULT_STORED_SETTINGS,
       firstSection,
     );
-    clearHeadingNumberingPrefixes(root as unknown as HTMLElement);
+    clearHeadingKeeperPrefixes(root as unknown as HTMLElement);
 
     expect(heading?.children).toEqual([userPrefix]);
   });

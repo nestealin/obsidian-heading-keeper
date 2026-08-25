@@ -27,7 +27,7 @@ importers:
 
   packages/link-core:
     dependencies:
-      "@heading-numbering/core":
+      "@heading-keeper/core":
         specifier: workspace:*
         version: link:../core
 
@@ -39,10 +39,10 @@ importers:
       "@codemirror/view":
         specifier: 6.38.6
         version: 6.38.6
-      "@heading-numbering/core":
+      "@heading-keeper/core":
         specifier: workspace:*
         version: link:../core
-      "@heading-numbering/link-core":
+      "@heading-keeper/link-core":
         specifier: workspace:*
         version: link:../link-core
       obsidian:

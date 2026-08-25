@@ -11,14 +11,14 @@ import {
   buildNumberingPlan,
   scanHeadings,
   type NumberingSettings,
-} from "@heading-numbering/core";
+} from "@heading-keeper/core";
 
 export interface EditorPrefix {
   from: number;
   text: string;
 }
 
-export const refreshHeadingNumbering = StateEffect.define<void>();
+export const refreshHeadingKeeper = StateEffect.define<void>();
 
 const activeEditorViews = new Set<EditorView>();
 
@@ -51,7 +51,7 @@ class PrefixWidget extends WidgetType {
 
   toDOM(): HTMLElement {
     const element = document.createElement("span");
-    element.className = "heading-numbering-prefix";
+    element.className = "heading-keeper-prefix";
     element.setAttribute("aria-hidden", "true");
     element.textContent = this.text;
     return element;
@@ -86,12 +86,12 @@ function shouldRefresh(update: ViewUpdate): boolean {
     update.docChanged ||
     update.viewportChanged ||
     update.transactions.some((transaction) =>
-      transaction.effects.some((effect) => effect.is(refreshHeadingNumbering)),
+      transaction.effects.some((effect) => effect.is(refreshHeadingKeeper)),
     )
   );
 }
 
-export function createHeadingNumberingExtension(
+export function createHeadingKeeperExtension(
   getSettings: () => NumberingSettings,
 ): Extension {
   return ViewPlugin.fromClass(
@@ -117,8 +117,8 @@ export function createHeadingNumberingExtension(
   );
 }
 
-export function refreshHeadingNumberingExtensions(): void {
+export function refreshHeadingKeeperExtensions(): void {
   for (const view of activeEditorViews) {
-    view.dispatch({ effects: refreshHeadingNumbering.of(undefined) });
+    view.dispatch({ effects: refreshHeadingKeeper.of(undefined) });
   }
 }

@@ -1,10 +1,15 @@
 export const packageIdentity = Object.freeze({
-  id: "heading-numbering",
+  id: "heading-keeper",
   version: "0.1.0",
 });
 
 export { DEFAULT_SETTINGS, validateSettings } from "./settings.js";
 export { scanHeadings } from "./scanner.js";
+export { detectSafeHeadingRename } from "./heading-rename.js";
+export type {
+  SafeHeadingRenameDetection,
+  UnsafeHeadingRenameReason,
+} from "./heading-rename.js";
 export { buildNumberingPlan, NumberingOverflowError } from "./numbering.js";
 export { classifyOwnership } from "./ownership.js";
 export { applyPlan, StalePlanError } from "./plan.js";

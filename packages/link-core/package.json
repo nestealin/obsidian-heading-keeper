@@ -1,5 +1,5 @@
 {
-  "name": "@heading-numbering/link-core",
+  "name": "@heading-keeper/link-core",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -15,6 +15,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@heading-numbering/core": "workspace:*"
+    "@heading-keeper/core": "workspace:*"
   }
 }

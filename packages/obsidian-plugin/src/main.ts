@@ -19,7 +19,7 @@ import {
   type StoredSettings,
   validateStoredSettings,
 } from "./settings.js";
-import type { FieldError } from "@heading-numbering/core";
+import type { FieldError } from "@heading-keeper/core";
 import { PluginDataStore } from "./plugin-data.js";
 import {
   createObsidianLinkResolver,
@@ -42,8 +42,8 @@ import {
 import { validatePersistedOperation } from "./persistence/operation-validator.js";
 import { sha256Text } from "./persistence/plan-service.js";
 import {
-  createHeadingNumberingExtension,
-  refreshHeadingNumberingExtensions,
+  createHeadingKeeperExtension,
+  refreshHeadingKeeperExtensions,
 } from "./editor-extension.js";
 import {
   decorateReadingHeadings,
@@ -51,12 +51,17 @@ import {
   registerReadingRoot,
   type ReadingSection,
 } from "./reading-processor.js";
+import { SavedHeadingLinkSync } from "./heading-link-sync.js";
+import type { PersistedOperation } from "./persistence/types.js";
+import { auditHeadingLinks as auditVaultHeadingLinks } from "@heading-keeper/link-core";
+import { HeadingLinkAuditModal } from "./heading-link-audit-modal.js";
 
 export { resolveLocale, translate } from "./i18n.js";
 export type { StoredSettings } from "./settings.js";
 
 const commandIds = {
   apply: "apply-persisted",
+  audit: "audit-heading-links",
   openSettings: "open-settings",
   preview: "preview-persisted",
   refresh: "refresh-virtual",
@@ -95,16 +100,16 @@ class ReadingRenderChild extends MarkdownRenderChild {
   }
 }
 
-export class HeadingNumberingSettingTab extends PluginSettingTab {
+export class HeadingKeeperSettingTab extends PluginSettingTab {
   constructor(
     app: App,
-    private readonly headingNumbering: HeadingNumberingPlugin,
+    private readonly headingKeeper: HeadingKeeperPlugin,
   ) {
-    super(app, headingNumbering);
+    super(app, headingKeeper);
   }
 
   display(): void {
-    const locale = this.headingNumbering.currentLocale();
+    const locale = this.headingKeeper.currentLocale();
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: translate(locale, "settings.heading") });
@@ -116,9 +121,20 @@ export class HeadingNumberingSettingTab extends PluginSettingTab {
         dropdown
           .addOption("virtual", translate(locale, "mode.virtual"))
           .addOption("persisted", translate(locale, "mode.persisted"))
-          .setValue(this.headingNumbering.settings.mode)
+          .setValue(this.headingKeeper.settings.mode)
           .onChange(async (value) => {
             await this.save({ mode: value as NumberingMode });
+          });
+      });
+
+    new Setting(containerEl)
+      .setName(translate(locale, "settings.updateHeadingLinks"))
+      .setDesc(translate(locale, "settings.updateHeadingLinksDescription"))
+      .addToggle((toggle) => {
+        toggle
+          .setValue(this.headingKeeper.settings.updateHeadingLinks)
+          .onChange(async (updateHeadingLinks) => {
+            await this.save({ updateHeadingLinks });
           });
       });
 
@@ -126,7 +142,7 @@ export class HeadingNumberingSettingTab extends PluginSettingTab {
       locale,
       "settings.topLevel",
       "settings.topLevelDescription",
-      this.headingNumbering.settings.topLevel,
+      this.headingKeeper.settings.topLevel,
       (topLevel) => ({
         topLevel: topLevel as StoredSettings["topLevel"],
       }),
@@ -135,7 +151,7 @@ export class HeadingNumberingSettingTab extends PluginSettingTab {
       locale,
       "settings.bottomLevel",
       "settings.bottomLevelDescription",
-      this.headingNumbering.settings.bottomLevel,
+      this.headingKeeper.settings.bottomLevel,
       (bottomLevel) => ({
         bottomLevel: bottomLevel as StoredSettings["bottomLevel"],
       }),
@@ -144,21 +160,21 @@ export class HeadingNumberingSettingTab extends PluginSettingTab {
       locale,
       "settings.startAt",
       "settings.startAtDescription",
-      this.headingNumbering.settings.startAt,
+      this.headingKeeper.settings.startAt,
       (startAt) => ({ startAt }),
     );
     this.addTextField(
       locale,
       "settings.numberSeparator",
       "settings.numberSeparatorDescription",
-      this.headingNumbering.settings.numberSeparator,
+      this.headingKeeper.settings.numberSeparator,
       (numberSeparator) => ({ numberSeparator }),
     );
     this.addTextField(
       locale,
       "settings.titleSeparator",
       "settings.titleSeparatorDescription",
-      this.headingNumbering.settings.titleSeparator,
+      this.headingKeeper.settings.titleSeparator,
       (titleSeparator) => ({ titleSeparator }),
     );
     new Setting(containerEl)
@@ -170,7 +186,7 @@ export class HeadingNumberingSettingTab extends PluginSettingTab {
           .addOption("one-fill", translate(locale, "gapStrategy.oneFill"))
           .addOption("compact", translate(locale, "gapStrategy.compact"))
           .addOption("skip", translate(locale, "gapStrategy.skip"))
-          .setValue(this.headingNumbering.settings.gapStrategy)
+          .setValue(this.headingKeeper.settings.gapStrategy)
           .onChange(async (gapStrategy) => {
             await this.save({
               gapStrategy: gapStrategy as StoredSettings["gapStrategy"],
@@ -186,7 +202,7 @@ export class HeadingNumberingSettingTab extends PluginSettingTab {
           .addOption("auto", translate(locale, "locale.auto"))
           .addOption("en", translate(locale, "locale.en"))
           .addOption("zh", translate(locale, "locale.zh"))
-          .setValue(this.headingNumbering.settings.locale)
+          .setValue(this.headingKeeper.settings.locale)
           .onChange(async (localePreference) => {
             await this.save({ locale: localePreference as LocalePreference });
           });
@@ -199,16 +215,16 @@ export class HeadingNumberingSettingTab extends PluginSettingTab {
         button
           .setButtonText(translate(locale, "settings.openRecovery"))
           .onClick(() => {
-            void this.headingNumbering.openRecoveryCenter();
+            void this.headingKeeper.openRecoveryCenter();
           });
       });
 
     containerEl.createEl("p", {
       text: translate(locale, "settings.persistenceBoundary"),
     });
-    if (this.headingNumbering.settingsErrors.length > 0) {
+    if (this.headingKeeper.settingsErrors.length > 0) {
       containerEl.createEl("p", {
-        text: `${translate(locale, "settings.errors")} ${this.headingNumbering.settingsErrors
+        text: `${translate(locale, "settings.errors")} ${this.headingKeeper.settingsErrors
           .map((error) => error.field)
           .join(", ")}`,
       });
@@ -255,12 +271,12 @@ export class HeadingNumberingSettingTab extends PluginSettingTab {
   }
 
   private async save(update: Partial<StoredSettings>): Promise<void> {
-    await this.headingNumbering.saveSettingsPatch(update);
+    await this.headingKeeper.saveSettingsPatch(update);
     this.display();
   }
 }
 
-export class HeadingNumberingPlugin extends Plugin {
+export class HeadingKeeperPlugin extends Plugin {
   settings: StoredSettings = { ...DEFAULT_STORED_SETTINGS };
   settingsErrors: FieldError[] = [];
   private disposed = false;
@@ -272,12 +288,13 @@ export class HeadingNumberingPlugin extends Plugin {
   private settingsSaveQueue: Promise<void> = Promise.resolve();
   private dataStore: PluginDataStore | null = null;
   private vaultAdapter: ObsidianVaultFileAdapter | null = null;
+  private headingLinkSync: SavedHeadingLinkSync | null = null;
   private currentPreview: Extract<
     WorkflowPreviewResult,
     { kind: "preview" }
   > | null = null;
   private mutationAuthority: {
-    kind: "apply" | "recovery";
+    kind: "apply" | "recovery" | "link-sync";
     token: object;
   } | null = null;
   private previewModal: {
@@ -300,9 +317,27 @@ export class HeadingNumberingPlugin extends Plugin {
   async onload(): Promise<void> {
     await this.loadSettings();
     this.vaultAdapter = new ObsidianVaultFileAdapter(this.app.vault);
-    this.addSettingTab(new HeadingNumberingSettingTab(this.app, this));
+    this.headingLinkSync = new SavedHeadingLinkSync({
+      enabled: () => this.settings.updateHeadingLinks,
+      listMarkdownPaths: () =>
+        this.app.vault.getMarkdownFiles().map((file) => file.path),
+      read: (path) => this.vaultAdapter!.read(path),
+      resolveTarget: createObsidianLinkResolver(this.app.metadataCache),
+      operationDependencies: {
+        createId: createOperationId,
+        now: () => new Date().toISOString(),
+        hashText: sha256Text,
+      },
+      execute: (operation) => this.executeAutomaticLinkSync(operation),
+    });
+    try {
+      await this.headingLinkSync.initialize();
+    } catch {
+      this.showNotice("notices.operationError");
+    }
+    this.addSettingTab(new HeadingKeeperSettingTab(this.app, this));
     this.registerEditorExtension(
-      createHeadingNumberingExtension(() => this.settings),
+      createHeadingKeeperExtension(() => this.settings),
     );
     this.registerMarkdownPostProcessor(async (root, context) => {
       const token = {};
@@ -357,6 +392,11 @@ export class HeadingNumberingPlugin extends Plugin {
       },
     });
     this.addCommand({
+      id: commandIds.audit,
+      name: translate(this.currentLocale(), "commands.audit"),
+      callback: () => this.openHeadingLinkAudit(),
+    });
+    this.addCommand({
       id: commandIds.openSettings,
       name: translate(this.currentLocale(), "commands.openSettings"),
       callback: () => this.openSettings(),
@@ -367,13 +407,27 @@ export class HeadingNumberingPlugin extends Plugin {
       ),
     );
     this.registerEvent(
-      this.app.vault.on("modify", () => this.invalidatePersistedPreview()),
+      this.app.vault.on("modify", (file) => {
+        this.invalidatePersistedPreview();
+        if (!(file instanceof TFile) || file.extension !== "md") return;
+        return this.handleSavedHeadingModify(file.path);
+      }),
     );
     this.registerEvent(
-      this.app.vault.on("rename", () => this.invalidatePersistedPreview()),
+      this.app.vault.on("rename", (file, oldPath) => {
+        this.invalidatePersistedPreview();
+        if (file instanceof TFile && file.extension === "md") {
+          this.headingLinkSync?.handleRename(oldPath, file.path);
+        } else {
+          this.headingLinkSync?.handleDelete(oldPath);
+        }
+      }),
     );
     this.registerEvent(
-      this.app.vault.on("delete", () => this.invalidatePersistedPreview()),
+      this.app.vault.on("delete", (file) => {
+        this.invalidatePersistedPreview();
+        this.headingLinkSync?.handleDelete(file.path);
+      }),
     );
     if ((this.dataStore?.recoveryOperations().length ?? 0) > 0) {
       this.showNotice("notices.recoveryAvailable");
@@ -386,6 +440,8 @@ export class HeadingNumberingPlugin extends Plugin {
     this.lifecycleGeneration += 1;
     this.previewGeneration += 1;
     this.currentPreview = null;
+    this.headingLinkSync?.dispose();
+    this.headingLinkSync = null;
     this.mutationAuthority = null;
     this.previewModal = null;
     this.revokeRecoveryModals();
@@ -597,6 +653,41 @@ export class HeadingNumberingPlugin extends Plugin {
     }
   }
 
+  async openHeadingLinkAudit(): Promise<void> {
+    const generation = this.lifecycleGeneration;
+    try {
+      const sources = await Promise.all(
+        this.app.vault
+          .getMarkdownFiles()
+          .slice()
+          .sort((left, right) =>
+            left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+          )
+          .map(async (file) => ({
+            path: file.path,
+            text: await this.app.vault.read(file),
+          })),
+      );
+      if (this.disposed || generation !== this.lifecycleGeneration) return;
+      const result = auditVaultHeadingLinks({
+        sources,
+        resolveTarget: createObsidianLinkResolver(this.app.metadataCache),
+      });
+      let modal: HeadingLinkAuditModal;
+      modal = new HeadingLinkAuditModal(
+        this.app,
+        result,
+        this.currentLocale(),
+        () => this.openModals.delete(modal),
+      );
+      this.openModals.add(modal);
+      modal.open();
+      this.showNotice("notices.auditCompleted");
+    } catch {
+      if (!this.disposed) this.showNotice("notices.operationError");
+    }
+  }
+
   async openRecoveryCenter(): Promise<void> {
     const operation = this.dataStore?.latestRecoveryOperation();
     const vault = this.vaultAdapter;
@@ -770,6 +861,7 @@ export class HeadingNumberingPlugin extends Plugin {
     }
     if (this.disposed) return;
     if (result.kind === "completed") {
+      this.headingLinkSync?.acceptCompleted(result.operation);
       this.previewWasInvalidated = false;
       await this.refreshVirtualRendering();
       if (!this.disposed) this.showNotice("notices.applyCompleted");
@@ -800,7 +892,7 @@ export class HeadingNumberingPlugin extends Plugin {
 
   private hasMutationAuthority(
     token: object,
-    kind: "apply" | "recovery",
+    kind: "apply" | "recovery" | "link-sync",
     generation: number,
   ): boolean {
     return (
@@ -809,6 +901,61 @@ export class HeadingNumberingPlugin extends Plugin {
       this.mutationAuthority?.kind === kind &&
       this.mutationAuthority.token === token
     );
+  }
+
+  private async handleSavedHeadingModify(path: string): Promise<void> {
+    try {
+      const result = await this.headingLinkSync?.handleModify(path);
+      if (!result || this.disposed) return;
+      if (result.kind === "completed") {
+        await this.refreshVirtualRendering();
+        if (!this.disposed) this.showNotice("notices.linkSyncCompleted");
+      } else if (
+        result.kind === "unsafe" &&
+        result.reason !== "unchanged-headings"
+      ) {
+        this.showNotice("notices.linkSyncSkipped");
+      } else if (result.kind === "stale-plan") {
+        this.showNotice("notices.linkSyncStale");
+      } else if (result.kind === "recovery-required") {
+        this.showNotice("notices.applyRecovery");
+      } else if (result.kind === "journal-error") {
+        this.showNotice("notices.operationError");
+      }
+    } catch {
+      if (!this.disposed) this.showNotice("notices.operationError");
+    }
+  }
+
+  private async executeAutomaticLinkSync(
+    operation: PersistedOperation,
+  ): Promise<
+    | Awaited<ReturnType<typeof executePersistedOperation>>
+    | { readonly kind: "busy" }
+  > {
+    if (
+      this.disposed ||
+      !this.vaultAdapter ||
+      !this.dataStore ||
+      this.mutationAuthority !== null ||
+      this.dataStore.recoveryOperations().length > 0
+    ) {
+      return { kind: "busy" };
+    }
+    const token = {};
+    const generation = this.lifecycleGeneration;
+    this.mutationAuthority = { kind: "link-sync", token };
+    try {
+      return await executePersistedOperation(operation, {
+        vault: this.vaultAdapter,
+        journal: this.dataStore.journal,
+        hashText: sha256Text,
+      });
+    } finally {
+      if (this.hasMutationAuthority(token, "link-sync", generation)) {
+        this.releaseMutationAuthority(token);
+      }
+    }
   }
 
   private releaseMutationAuthority(token: object): void {
@@ -936,7 +1083,7 @@ export class HeadingNumberingPlugin extends Plugin {
     if (this.disposed) {
       return;
     }
-    refreshHeadingNumberingExtensions();
+    refreshHeadingKeeperExtensions();
     await Promise.all(
       Array.from(this.readingRoots, async ([root, state]) => {
         await this.decorateReadingRoot(root, state);
@@ -1020,7 +1167,11 @@ export class HeadingNumberingPlugin extends Plugin {
       | "notices.settingsSaving"
       | "notices.recoveryAvailable"
       | "notices.recoveryNone"
-      | "notices.restoreCompleted",
+      | "notices.restoreCompleted"
+      | "notices.linkSyncCompleted"
+      | "notices.linkSyncSkipped"
+      | "notices.linkSyncStale"
+      | "notices.auditCompleted",
   ): void {
     new Notice(translate(this.currentLocale(), key));
   }
@@ -1055,4 +1206,4 @@ function createOperationId(): string {
   );
 }
 
-export default HeadingNumberingPlugin;
+export default HeadingKeeperPlugin;

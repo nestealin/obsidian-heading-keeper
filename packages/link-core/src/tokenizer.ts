@@ -1,4 +1,4 @@
-import type { SourceRange } from "@heading-numbering/core";
+import type { SourceRange } from "@heading-keeper/core";
 import type { LinkToken } from "./types.js";
 
 interface LogicalLine {

@@ -2,7 +2,7 @@ import {
   buildNumberingPlan,
   scanHeadings,
   type NumberingSettings,
-} from "@heading-numbering/core";
+} from "@heading-keeper/core";
 
 export interface ReadingPrefix {
   index: number;
@@ -218,7 +218,7 @@ export function planReadingDecorations(
   return { diagnostics: [], prefixes };
 }
 
-export function clearHeadingNumberingPrefixes(root: HTMLElement): void {
+export function clearHeadingKeeperPrefixes(root: HTMLElement): void {
   const prefixes = ownedRoots.get(root)?.prefixes;
   if (!prefixes) {
     return;
@@ -230,7 +230,7 @@ export function clearHeadingNumberingPrefixes(root: HTMLElement): void {
 }
 
 export function disposeReadingRoot(root: HTMLElement): void {
-  clearHeadingNumberingPrefixes(root);
+  clearHeadingKeeperPrefixes(root);
   ownedRoots.delete(root);
   registeredRoots.delete(root);
 }
@@ -243,7 +243,7 @@ export function decorateReadingHeadings(
   sourcePath = "",
 ): Pick<ReadingDecorationPlan, "diagnostics"> {
   const ownedRoot = registerRoot(root, section, sourcePath);
-  clearHeadingNumberingPrefixes(root);
+  clearHeadingKeeperPrefixes(root);
   const headings = visibleHeadings(root);
   const decorationPlan = planReadingDecorations(
     markdown,
@@ -259,9 +259,9 @@ export function decorateReadingHeadings(
       continue;
     }
     const element = root.ownerDocument.createElement("span");
-    element.className = "heading-numbering-prefix";
+    element.className = "heading-keeper-prefix";
     element.setAttribute("aria-hidden", "true");
-    element.setAttribute("data-heading-numbering-owner", "true");
+    element.setAttribute("data-heading-keeper-owner", "true");
     element.textContent = prefix.text;
     heading.insertBefore(element, heading.firstChild);
     ownedRoot.prefixes.add(element);

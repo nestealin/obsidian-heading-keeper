@@ -60,7 +60,7 @@ describe("production bundle surface", () => {
       },
     });
 
-    expect(module.exports.default).toBe(module.exports.HeadingNumberingPlugin);
+    expect(module.exports.default).toBe(module.exports.HeadingKeeperPlugin);
     expect(
       Object.getPrototypeOf(
         (module.exports.default as { prototype: object }).prototype,

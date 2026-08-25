@@ -103,7 +103,7 @@ vi.mock("obsidian", () => {
           : {};
       },
     };
-    manifest = { id: "heading-numbering" };
+    manifest = { id: "heading-keeper" };
     addCommand(command: { id: string; callback: () => void }) {
       state.commands.push(command);
     }
@@ -212,11 +212,11 @@ vi.mock("obsidian", () => {
 });
 
 vi.mock("../src/editor-extension.js", () => ({
-  createHeadingNumberingExtension: () => ({}),
-  refreshHeadingNumberingExtensions: () => undefined,
+  createHeadingKeeperExtension: () => ({}),
+  refreshHeadingKeeperExtensions: () => undefined,
 }));
 
-import { HeadingNumberingPlugin } from "../src/main.js";
+import { HeadingKeeperPlugin } from "../src/main.js";
 import { sha256Text } from "../src/persistence/plan-service.js";
 import type {
   PersistedOperation,
@@ -250,7 +250,7 @@ beforeEach(() => {
 
 describe("persisted plugin workflow", () => {
   it("rejects apply without an exact in-memory preview", async () => {
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     await plugin.applyCurrentPreview();
     expect(state.writes).toEqual([]);
@@ -261,14 +261,14 @@ describe("persisted plugin workflow", () => {
     state.loadedData = { ...DEFAULT_STORED_SETTINGS, mode: "virtual" };
     state.activePath = "Target.md";
     state.files.set("Target.md", "## Alpha");
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
 
     await plugin.previewPersisted("add");
     await plugin.previewPersisted("remove");
     await plugin.applyCurrentPreview();
 
-    expect(state.reads).toBe(0);
+    expect(state.reads).toBe(1);
     expect(state.writes).toEqual([]);
     expect(state.notices).toEqual([
       "Switch to persisted mode first.",
@@ -280,7 +280,7 @@ describe("persisted plugin workflow", () => {
   it("reports a no-op preview without retaining apply authority", async () => {
     state.activePath = "Target.md";
     state.files.set("Target.md", "# Outside");
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
 
     await plugin.previewPersisted("add");
@@ -295,7 +295,7 @@ describe("persisted plugin workflow", () => {
     state.files.set("Target.md", "## Alpha");
     state.files.set("Links.md", "[[Target#Alpha|alias]]");
     state.linkTargets.set("Target", "Target.md");
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
 
     await plugin.previewPersisted("add");
@@ -311,7 +311,7 @@ describe("persisted plugin workflow", () => {
   it("consumes apply authority synchronously across command and modal triggers", async () => {
     state.activePath = "Target.md";
     state.files.set("Target.md", "## Alpha");
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     await plugin.previewPersisted("add");
 
@@ -326,7 +326,7 @@ describe("persisted plugin workflow", () => {
   it("revokes only the closed preview modal nonce and keeps command authority", async () => {
     state.activePath = "Target.md";
     state.files.set("Target.md", "## Alpha");
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     await plugin.previewPersisted("add");
     const modal = state.modals.at(-1) as { close(): void };
@@ -345,7 +345,7 @@ describe("persisted plugin workflow", () => {
   it("invalidates an older modal nonce when a newer preview opens", async () => {
     state.activePath = "Target.md";
     state.files.set("Target.md", "## Alpha");
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     await plugin.previewPersisted("add");
     const oldButton = state.modalButtons.at(-1);
@@ -367,7 +367,7 @@ describe("persisted plugin workflow", () => {
     state.activePath = "Target.md";
     state.files.set("Target.md", "## Alpha");
     state.files.set("Other.md", "## Other");
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     await plugin.previewPersisted("add");
     await plugin.saveSettings({ ...plugin.settings, titleSeparator: " · " });
@@ -384,7 +384,7 @@ describe("persisted plugin workflow", () => {
   it("keeps settings but invalidates preview when storage rejects a settings save", async () => {
     state.activePath = "Target.md";
     state.files.set("Target.md", "## Alpha");
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     await plugin.previewPersisted("add");
     state.saveError = true;
@@ -404,7 +404,7 @@ describe("persisted plugin workflow", () => {
     const firstGate = deferred<void>();
     const secondGate = deferred<void>();
     state.saveQueue.push(firstGate.promise, secondGate.promise);
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     await plugin.previewPersisted("add");
     const readsBeforeSaves = state.reads;
@@ -443,7 +443,7 @@ describe("persisted plugin workflow", () => {
 
   it("keeps the first committed patch when the second patch save fails", async () => {
     state.saveOutcomes.push("ok", "fail");
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
 
     const results = await Promise.all([
@@ -460,7 +460,7 @@ describe("persisted plugin workflow", () => {
 
   it("bases a second successful patch on the old commit after the first fails", async () => {
     state.saveOutcomes.push("fail", "ok");
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
 
     const results = await Promise.all([
@@ -476,7 +476,7 @@ describe("persisted plugin workflow", () => {
   });
 
   it("keeps last-request replacement semantics for the public full save", async () => {
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
 
     const results = await Promise.all([
@@ -499,7 +499,7 @@ describe("persisted plugin workflow", () => {
   it("keeps a stale source at zero writes through executor preflight", async () => {
     state.activePath = "Target.md";
     state.files.set("Target.md", "## Alpha");
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     await plugin.previewPersisted("add");
     state.files.set("Target.md", "## external");
@@ -515,7 +515,7 @@ describe("persisted plugin workflow", () => {
   it("previews removal and preserves semantic numeric headings", async () => {
     state.activePath = "Target.md";
     state.files.set("Target.md", "## 1. Alpha\r\n## 2026 plan");
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
 
     await plugin.previewPersisted("remove");
@@ -525,16 +525,16 @@ describe("persisted plugin workflow", () => {
   });
 
   it("guards the narrow settings capability and its stable fallback", async () => {
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     plugin.openSettings();
     expect(state.settingOpens).toBe(1);
-    expect(state.settingTabIds).toEqual(["heading-numbering"]);
+    expect(state.settingTabIds).toEqual(["heading-keeper"]);
 
     state.settingAvailable = false;
     plugin.openSettings();
     expect(state.notices.at(-1)).toBe(
-      "Open Obsidian Settings to configure Heading Numbering.",
+      "Open Obsidian Settings to configure Heading Keeper.",
     );
   });
 
@@ -564,7 +564,7 @@ describe("persisted plugin workflow", () => {
       journals: { "recover-1": operation },
       latestJournalId: "recover-1",
     };
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
 
     await plugin.onload();
     await plugin.openRecoveryCenter();
@@ -599,7 +599,7 @@ describe("persisted plugin workflow", () => {
       journals: { "recover-once": operation },
       latestJournalId: "recover-once",
     };
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     await plugin.openRecoveryCenter();
     const firstModal = state.modals.at(-1) as { close(): void };
@@ -649,7 +649,7 @@ describe("persisted plugin workflow", () => {
       journals: { "old-recovery": recovery },
       latestJournalId: "old-recovery",
     };
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     await plugin.openRecoveryCenter();
     const staleRecovery = state.modalButtons.at(-1);
@@ -702,7 +702,7 @@ describe("persisted plugin workflow", () => {
       journals: { "other-recovery": recovery },
       latestJournalId: "other-recovery",
     };
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     await plugin.previewPersisted("add");
     await plugin.openRecoveryCenter();
@@ -743,7 +743,7 @@ describe("persisted plugin workflow", () => {
       },
       latestJournalId: "second-recovery",
     };
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     const access = recoveryAccess(plugin);
     const dependencies: PersistenceDependencies = {
@@ -787,7 +787,7 @@ describe("persisted plugin workflow", () => {
       journals: { "completed-recovery": recovery },
       latestJournalId: "completed-recovery",
     };
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     await plugin.openRecoveryCenter();
     const staleRecovery = state.modalButtons.at(-1);
@@ -820,7 +820,7 @@ describe("persisted plugin workflow", () => {
       journals: { "failed-recovery": recovery },
       latestJournalId: "failed-recovery",
     };
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     await plugin.previewPersisted("add");
     await plugin.openRecoveryCenter();
@@ -855,7 +855,7 @@ describe("persisted plugin workflow", () => {
       journals: { "unloaded-recovery": recovery },
       latestJournalId: "unloaded-recovery",
     };
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     await plugin.openRecoveryCenter();
     const staleRecovery = state.modalButtons.at(-1);
@@ -894,7 +894,7 @@ describe("persisted plugin workflow", () => {
       journals: { "pending-only": operation },
       latestJournalId: "pending-only",
     };
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     await plugin.openRecoveryCenter();
 
@@ -915,9 +915,9 @@ describe("persisted plugin workflow", () => {
     const delayed = deferred<string>();
     state.activePath = "Target.md";
     state.files.set("Target.md", "## Alpha");
-    state.readQueue.push(delayed.promise);
-    const plugin = new HeadingNumberingPlugin();
+    const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
+    state.readQueue.push(delayed.promise);
 
     const preview = plugin.previewPersisted("add");
     plugin.onunload();
@@ -962,7 +962,7 @@ async function recoveryOperation(
   };
 }
 
-function recoveryAccess(plugin: HeadingNumberingPlugin): {
+function recoveryAccess(plugin: HeadingKeeperPlugin): {
   dataStore: { journal: PersistenceDependencies["journal"] };
   openRecoveryOperation(
     operation: PersistedOperation,

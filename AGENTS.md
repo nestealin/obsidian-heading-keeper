@@ -1,4 +1,4 @@
-# Heading Numbering engineering rules
+# Heading Keeper engineering rules
 
 - Keep the plugin local-only and offline at runtime.
 - Keep virtual numbering as the default; persistence requires an explicit user action.

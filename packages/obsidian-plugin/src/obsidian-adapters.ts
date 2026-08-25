@@ -1,5 +1,5 @@
 import { TFile, type MetadataCache, type Vault } from "obsidian";
-import type { ResolvedTarget } from "@heading-numbering/link-core";
+import type { ResolvedTarget } from "@heading-keeper/link-core";
 import type { VaultFileAdapter } from "./persistence/types.js";
 
 type VaultSurface = Pick<Vault, "getAbstractFileByPath" | "modify" | "read">;

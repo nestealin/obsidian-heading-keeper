@@ -51,7 +51,7 @@ try {
 
 execFileSync(
   "corepack",
-  ["pnpm", "--filter", "@heading-numbering/obsidian-plugin", "build"],
+  ["pnpm", "--filter", "@heading-keeper/obsidian-plugin", "build"],
   { cwd: repositoryRoot, stdio: "inherit" },
 );
 

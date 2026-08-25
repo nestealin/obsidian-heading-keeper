@@ -15,6 +15,42 @@ describe("plugin stored settings", () => {
       gapStrategy: "compact",
       mode: "virtual",
       locale: "auto",
+      updateHeadingLinks: true,
+    });
+  });
+
+  it("migrates legacy settings without a link-sync field to enabled", () => {
+    const { updateHeadingLinks: _removed, ...legacy } = DEFAULT_STORED_SETTINGS;
+
+    expect(validateStoredSettings(legacy)).toEqual({
+      ok: true,
+      value: { ...DEFAULT_STORED_SETTINGS, updateHeadingLinks: true },
+    });
+  });
+
+  it("keeps link synchronization independently configurable and rejects invalid values", () => {
+    expect(
+      validateStoredSettings({
+        ...DEFAULT_STORED_SETTINGS,
+        updateHeadingLinks: false,
+      }),
+    ).toEqual({
+      ok: true,
+      value: { ...DEFAULT_STORED_SETTINGS, updateHeadingLinks: false },
+    });
+    expect(
+      validateStoredSettings({
+        ...DEFAULT_STORED_SETTINGS,
+        updateHeadingLinks: "yes",
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        {
+          field: "updateHeadingLinks",
+          message: "Expected a boolean.",
+        },
+      ],
     });
   });
 

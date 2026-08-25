@@ -1,8 +1,9 @@
-import { applyPlan } from "@heading-numbering/core";
+import { applyPlan } from "@heading-keeper/core";
 import type {
   BuildPersistedOperationDependencies,
   BuildPersistedOperationInput,
   BuildPersistedOperationResult,
+  LinkSourcePlanInput,
   PlannedFileRole,
   PlannedTextEdit,
 } from "./types.js";
@@ -38,6 +39,10 @@ interface MutableFilePlan {
   readonly beforeText: string;
   readonly role: PlannedFileRole;
   readonly edits: PlannedTextEdit[];
+}
+
+export interface BuildLinkOnlyOperationInput {
+  readonly linkSources: readonly LinkSourcePlanInput[];
 }
 
 function copiedEdit(edit: PlannedTextEdit): PlannedTextEdit {
@@ -189,6 +194,63 @@ export async function buildPersistedOperation(
   ) {
     throw new PersistedPlanError("invalid-target-plan");
   }
+
+  const plannedFiles = await Promise.all(
+    materialized.map(async (file) => ({
+      path: file.path,
+      beforeHash: await dependencies.hashText(file.beforeText),
+      beforeText: file.beforeText,
+      afterHash: await dependencies.hashText(file.afterText),
+      afterText: file.afterText,
+      role: file.role,
+    })),
+  );
+
+  return {
+    kind: "operation",
+    operation: snapshotOperation({
+      id: dependencies.createId(),
+      createdAt: dependencies.now(),
+      state: "previewed",
+      files: plannedFiles,
+      completedPaths: [],
+    }),
+  };
+}
+
+export async function buildLinkOnlyOperation(
+  input: BuildLinkOnlyOperationInput,
+  dependencies: BuildPersistedOperationDependencies,
+): Promise<BuildPersistedOperationResult> {
+  const files = new Map<string, MutableFilePlan>();
+  for (const source of input.linkSources) {
+    const beforeText = source.beforeText;
+    const existing = files.get(source.path);
+    if (existing) {
+      if (existing.beforeText !== beforeText) {
+        throw new PersistedPlanError("source-text-conflict");
+      }
+      existing.edits.push(...source.edits.map(copiedEdit));
+    } else {
+      files.set(source.path, {
+        path: source.path,
+        beforeText,
+        role: "link-source",
+        edits: source.edits.map(copiedEdit),
+      });
+    }
+  }
+
+  const materialized = [...files.values()]
+    .map((file) => ({
+      ...file,
+      afterText: applyVerifiedEdits(file.beforeText, file.edits),
+    }))
+    .filter((file) => file.afterText !== file.beforeText)
+    .sort((left, right) =>
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+    );
+  if (materialized.length === 0) return { kind: "no-op" };
 
   const plannedFiles = await Promise.all(
     materialized.map(async (file) => ({
