@@ -31,8 +31,9 @@ The workspace keeps Markdown parsing and numbering logic in
 Version `0.1.0` is an internal-test build. It is suitable for isolated Vault
 observation, but it is not yet approved as the sole heading writer for a large
 existing Vault. Formal replacement still requires durable rename retries,
-bounded recovery data, incremental link indexing, guided broken-link repair,
-and a Vault-wide persisted-numbering migration workflow.
+per-file concurrency validation and reconciliation, bounded recovery data,
+incremental link indexing, guided broken-link repair, and a Vault-wide
+persisted-numbering migration workflow.
 
 ## Internal-test installation
 
