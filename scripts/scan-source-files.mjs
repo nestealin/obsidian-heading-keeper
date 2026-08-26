@@ -1,6 +1,7 @@
 import { isUtf8 } from "node:buffer";
 import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 
 export const releaseAssetPaths = [
   "packages/obsidian-plugin/main.js",
@@ -24,11 +25,11 @@ export function isBinaryContent(content) {
   return content.length > 0 && controlBytes / content.length > 0.3;
 }
 
-export async function readTextSourceFiles() {
+export async function readTextSourceFiles(root = process.cwd()) {
   const files = execFileSync(
     "git",
     ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-    { encoding: "buffer" },
+    { cwd: root, encoding: "buffer" },
   )
     .toString("utf8")
     .split("\0")
@@ -36,7 +37,7 @@ export async function readTextSourceFiles() {
   const textFiles = [];
 
   for (const file of files) {
-    const content = await readFile(file);
+    const content = await readFile(resolve(root, file));
     if (!isBinaryContent(content))
       textFiles.push({ content: content.toString("utf8"), file });
   }
@@ -44,14 +45,14 @@ export async function readTextSourceFiles() {
   return textFiles;
 }
 
-export async function readTextReleaseFiles() {
-  const textFiles = await readTextSourceFiles();
+export async function readTextReleaseFiles(root = process.cwd()) {
+  const textFiles = await readTextSourceFiles(root);
   const knownFiles = new Set(textFiles.map(({ file }) => file));
 
   for (const file of releaseAssetPaths) {
     if (knownFiles.has(file)) continue;
     try {
-      const content = await readFile(file);
+      const content = await readFile(resolve(root, file));
       if (!isBinaryContent(content)) {
         textFiles.push({ content: content.toString("utf8"), file });
       }

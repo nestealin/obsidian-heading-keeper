@@ -16,9 +16,10 @@
     "scan:sensitive": "node scripts/scan-sensitive.mjs",
     "scan:rejected": "node scripts/scan-rejected.mjs",
     "scan:word-joiner": "node scripts/scan-word-joiner.mjs",
+    "verify:identity": "node scripts/verify-identity.mjs",
     "verify:deployment": "node scripts/verify-deployment.mjs",
-    "verify:release": "corepack pnpm package:plugin && corepack pnpm scan:word-joiner && corepack pnpm scan:sensitive && node scripts/verify-release-rejected.mjs && vitest --config vitest.workspace.ts run scripts/test/release-surface.test.ts",
-    "verify:local": "corepack pnpm format:check && corepack pnpm typecheck && corepack pnpm test && corepack pnpm build && corepack pnpm scan:sensitive && corepack pnpm scan:word-joiner && git diff --check"
+    "verify:release": "corepack pnpm package:plugin && corepack pnpm scan:word-joiner && corepack pnpm scan:sensitive && corepack pnpm verify:identity && node scripts/verify-release-rejected.mjs && vitest --config vitest.workspace.ts run scripts/test/release-surface.test.ts",
+    "verify:local": "corepack pnpm format:check && corepack pnpm typecheck && corepack pnpm test && corepack pnpm build && corepack pnpm scan:sensitive && corepack pnpm scan:word-joiner && corepack pnpm verify:identity && git diff --check"
   },
   "devDependencies": {
     "@types/node": "22.15.3",

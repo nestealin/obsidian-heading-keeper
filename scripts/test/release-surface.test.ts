@@ -16,6 +16,7 @@ const releaseRejectedScript = join(
   repositoryRoot,
   "scripts/verify-release-rejected.mjs",
 );
+const identityScript = join(repositoryRoot, "scripts/verify-identity.mjs");
 const sensitiveScript = join(repositoryRoot, "scripts/scan-sensitive.mjs");
 const verifyDeploymentScript = join(
   repositoryRoot,
@@ -161,6 +162,33 @@ describe("release surface", () => {
       REJECTED_TERMS_JSON: JSON.stringify(["heading-keeper"]),
     });
     expect(detected.status).toBe(1);
+  });
+
+  it("rejects the retired product identity in either a source path or content", async () => {
+    const fixtureRoot = await mkdtemp(
+      join(tmpdir(), "heading-keeper-identity-"),
+    );
+    temporaryDirectories.push(fixtureRoot);
+    execFileSync("git", ["init", "--quiet"], { cwd: fixtureRoot });
+
+    const retiredSlug = ["heading", "numbering"].join("-");
+    const retiredName = ["Heading", "Numbering"].join(" ");
+    await mkdir(join(fixtureRoot, "docs"));
+    await writeFile(
+      join(fixtureRoot, "docs", `${retiredSlug}.md`),
+      `# ${retiredName}\n`,
+    );
+
+    const rejected = run(identityScript, ["--root", fixtureRoot]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("Retired product identity found");
+    expect(rejected.stderr).toContain(`docs/${retiredSlug}.md: path`);
+    expect(rejected.stderr).toContain(`docs/${retiredSlug}.md: content`);
+
+    await rm(join(fixtureRoot, "docs"), { recursive: true });
+    await writeFile(join(fixtureRoot, "README.md"), "# Heading Keeper\n");
+    const accepted = run(identityScript, ["--root", fixtureRoot]);
+    expect(accepted.status).toBe(0);
   });
 
   it("keeps the bundled release identity and runtime surface constrained", () => {
