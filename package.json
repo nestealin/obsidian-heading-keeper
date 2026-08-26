@@ -10,7 +10,7 @@
   "scripts": {
     "build": "corepack pnpm -r build",
     "format:check": "prettier --check .",
-    "typecheck": "corepack pnpm -r typecheck && tsc -p scripts/tsconfig.json",
+    "typecheck": "corepack pnpm -r build && corepack pnpm -r typecheck && tsc -p scripts/tsconfig.json",
     "test": "corepack pnpm -r build && vitest --config vitest.workspace.ts run",
     "package:plugin": "node scripts/package-plugin.mjs",
     "scan:sensitive": "node scripts/scan-sensitive.mjs",
