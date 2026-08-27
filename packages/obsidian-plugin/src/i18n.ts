@@ -110,7 +110,7 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     "settings.heading": "Heading Keeper",
     "settings.mode": "Numbering mode",
     "settings.modeDescription":
-      "Persisted mode only enables explicit preview, apply, and remove actions. It never writes in the background.",
+      "Virtual mode is the default. After you select persisted mode once, saved and opened notes are maintained automatically and silently.",
     "settings.updateHeadingLinks": "Keep heading links updated",
     "settings.updateHeadingLinksDescription":
       "Update resolved heading-fragment links after one uniquely provable saved heading rename. Ambiguous changes are preserved.",
@@ -134,11 +134,11 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     "settings.locale": "Language",
     "settings.localeDescription": "Choose the language used by this plugin.",
     "settings.persistenceBoundary":
-      "Virtual numbering is the default. File changes require an explicit preview and apply step.",
+      "Persisted mode is a durable opt-in. Automatic maintenance uses recoverable transactions and pauses on conflicts.",
     "settings.errors": "Saved settings need attention.",
-    "commands.preview": "Preview persisted numbering",
-    "commands.apply": "Apply persisted numbering",
-    "commands.remove": "Remove persisted numbering",
+    "commands.preview": "Preview current reconciliation",
+    "commands.apply": "Reconcile current note now",
+    "commands.remove": "Remove managed numbering",
     "commands.refresh": "Refresh virtual numbering",
     "commands.audit": "Audit heading links",
     "commands.openSettings": "Open Heading Keeper settings",
@@ -231,7 +231,7 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     "settings.heading": "标题编号",
     "settings.mode": "编号模式",
     "settings.modeDescription":
-      "写入模式只启用明确的预览、写入和移除操作，绝不会在后台写入。",
+      "默认使用虚拟编号。选择一次写入模式后，已保存和新打开的笔记会自动、静默维护。",
     "settings.updateHeadingLinks": "同步标题链接",
     "settings.updateHeadingLinksDescription":
       "保存后仅在单个标题重命名可被唯一证明时更新已解析的标题片段链接；歧义变更保持不动。",
@@ -250,11 +250,11 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     "settings.locale": "语言",
     "settings.localeDescription": "选择此插件使用的语言。",
     "settings.persistenceBoundary":
-      "默认只显示虚拟编号。修改文件需要明确的预览和执行步骤。",
+      "写入模式是持久授权；自动维护使用可恢复事务，发生冲突时暂停而不覆盖。",
     "settings.errors": "已保存的设置需要处理。",
-    "commands.preview": "预览写入编号",
-    "commands.apply": "写入编号",
-    "commands.remove": "移除已写入编号",
+    "commands.preview": "预览当前校正",
+    "commands.apply": "立即校正当前笔记",
+    "commands.remove": "移除受管编号",
     "commands.refresh": "刷新虚拟编号",
     "commands.audit": "审计标题链接",
     "commands.openSettings": "打开标题编号设置",

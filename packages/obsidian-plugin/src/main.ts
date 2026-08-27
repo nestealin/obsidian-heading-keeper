@@ -6,6 +6,7 @@ import {
   Setting,
   TFile,
   type App,
+  type CachedMetadata,
 } from "obsidian";
 import {
   resolveLocale,
@@ -19,10 +20,15 @@ import {
   type StoredSettings,
   validateStoredSettings,
 } from "./settings.js";
-import type { FieldError } from "@heading-keeper/core";
+import {
+  buildNumberingPlan,
+  scanHeadings,
+  type FieldError,
+} from "@heading-keeper/core";
 import { PluginDataStore } from "./plugin-data.js";
 import {
   createObsidianLinkResolver,
+  ObsidianMetadataLinkIndex,
   ObsidianVaultFileAdapter,
 } from "./obsidian-adapters.js";
 import {
@@ -51,10 +57,10 @@ import {
   registerReadingRoot,
   type ReadingSection,
 } from "./reading-processor.js";
-import { SavedHeadingLinkSync } from "./heading-link-sync.js";
 import type { PersistedOperation } from "./persistence/types.js";
 import { auditHeadingLinks as auditVaultHeadingLinks } from "@heading-keeper/link-core";
 import { HeadingLinkAuditModal } from "./heading-link-audit-modal.js";
+import { AutomaticMaintenance } from "./automatic-maintenance.js";
 
 export { resolveLocale, translate } from "./i18n.js";
 export type { StoredSettings } from "./settings.js";
@@ -288,7 +294,9 @@ export class HeadingKeeperPlugin extends Plugin {
   private settingsSaveQueue: Promise<void> = Promise.resolve();
   private dataStore: PluginDataStore | null = null;
   private vaultAdapter: ObsidianVaultFileAdapter | null = null;
-  private headingLinkSync: SavedHeadingLinkSync | null = null;
+  private metadataLinkIndex: ObsidianMetadataLinkIndex | null = null;
+  private automaticMaintenance: AutomaticMaintenance | null = null;
+  private readonly metadataHeadings = new Map<string, string[]>();
   private currentPreview: Extract<
     WorkflowPreviewResult,
     { kind: "preview" }
@@ -317,24 +325,36 @@ export class HeadingKeeperPlugin extends Plugin {
   async onload(): Promise<void> {
     await this.loadSettings();
     this.vaultAdapter = new ObsidianVaultFileAdapter(this.app.vault);
-    this.headingLinkSync = new SavedHeadingLinkSync({
-      enabled: () => this.settings.updateHeadingLinks,
-      listMarkdownPaths: () =>
-        this.app.vault.getMarkdownFiles().map((file) => file.path),
+    this.metadataLinkIndex = new ObsidianMetadataLinkIndex(
+      this.app.vault,
+      this.app.metadataCache,
+    );
+    this.metadataLinkIndex.rebuild();
+    this.captureMetadataHeadings();
+    this.automaticMaintenance = new AutomaticMaintenance({
+      settings: () => this.settings,
       read: (path) => this.vaultAdapter!.read(path),
+      indexReady: () => this.metadataLinkIndex?.isReady ?? false,
+      candidates: (targetPath, fragments) =>
+        this.metadataLinkIndex?.candidates(targetPath, fragments) ?? [],
       resolveTarget: createObsidianLinkResolver(this.app.metadataCache),
       operationDependencies: {
         createId: createOperationId,
         now: () => new Date().toISOString(),
         hashText: sha256Text,
       },
-      execute: (operation) => this.executeAutomaticLinkSync(operation),
+      journal: this.dataStore!.journal,
+      execute: (operation) => this.executeAutomaticMaintenance(operation),
+      now: () => Date.now(),
+      onConflict: (_operation, code) => {
+        if (this.disposed) return;
+        this.showNotice(
+          code === "storage-limit"
+            ? "notices.storageError"
+            : "notices.applyRecovery",
+        );
+      },
     });
-    try {
-      await this.headingLinkSync.initialize();
-    } catch {
-      this.showNotice("notices.operationError");
-    }
     this.addSettingTab(new HeadingKeeperSettingTab(this.app, this));
     this.registerEditorExtension(
       createHeadingKeeperExtension(() => this.settings),
@@ -402,36 +422,75 @@ export class HeadingKeeperPlugin extends Plugin {
       callback: () => this.openSettings(),
     });
     this.registerEvent(
-      this.app.workspace.on("file-open", () =>
-        this.invalidatePersistedPreview(),
-      ),
+      this.app.workspace.on("file-open", (file) => {
+        this.invalidatePersistedPreview();
+        if (
+          file instanceof TFile &&
+          file.extension === "md" &&
+          this.settings.mode === "persisted"
+        ) {
+          this.automaticMaintenance?.schedule(file.path, "file-open");
+        }
+      }),
     );
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
         this.invalidatePersistedPreview();
         if (!(file instanceof TFile) || file.extension !== "md") return;
-        return this.handleSavedHeadingModify(file.path);
+        if (this.settings.mode === "persisted") {
+          this.automaticMaintenance?.schedule(file.path, "modify");
+        }
+      }),
+    );
+    this.registerEvent(
+      this.app.metadataCache.on(
+        "changed",
+        (file: TFile, _data: string, cache: CachedMetadata) => {
+          const before = this.metadataHeadings.get(file.path) ?? [];
+          const after = (cache.headings ?? []).map((heading) => heading.heading);
+          this.metadataLinkIndex?.update(file, cache);
+          this.metadataHeadings.set(file.path, after);
+          if (this.settings.mode === "persisted") {
+            this.automaticMaintenance?.acceptMetadataChange(
+              file.path,
+              before,
+              after,
+            );
+          }
+        },
+      ),
+    );
+    this.registerEvent(
+      this.app.metadataCache.on("resolved", () => {
+        this.metadataLinkIndex?.rebuild();
+        this.captureMetadataHeadings();
       }),
     );
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
         this.invalidatePersistedPreview();
         if (file instanceof TFile && file.extension === "md") {
-          this.headingLinkSync?.handleRename(oldPath, file.path);
+          this.metadataLinkIndex?.renameSource(oldPath, file.path);
+          const headings = this.metadataHeadings.get(oldPath);
+          this.metadataHeadings.delete(oldPath);
+          if (headings) this.metadataHeadings.set(file.path, headings);
+          if (this.settings.mode === "persisted") {
+            this.automaticMaintenance?.schedule(file.path, "modify");
+          }
         } else {
-          this.headingLinkSync?.handleDelete(oldPath);
+          this.metadataLinkIndex?.deleteSource(oldPath);
+          this.metadataHeadings.delete(oldPath);
         }
       }),
     );
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
         this.invalidatePersistedPreview();
-        this.headingLinkSync?.handleDelete(file.path);
+        this.metadataLinkIndex?.deleteSource(file.path);
+        this.metadataHeadings.delete(file.path);
       }),
     );
-    if ((this.dataStore?.recoveryOperations().length ?? 0) > 0) {
-      this.showNotice("notices.recoveryAvailable");
-    }
+    await this.automaticMaintenance.resume();
   }
 
   onunload(): void {
@@ -440,8 +499,11 @@ export class HeadingKeeperPlugin extends Plugin {
     this.lifecycleGeneration += 1;
     this.previewGeneration += 1;
     this.currentPreview = null;
-    this.headingLinkSync?.dispose();
-    this.headingLinkSync = null;
+    this.automaticMaintenance?.dispose();
+    this.automaticMaintenance = null;
+    this.metadataLinkIndex?.dispose();
+    this.metadataLinkIndex = null;
+    this.metadataHeadings.clear();
     this.mutationAuthority = null;
     this.previewModal = null;
     this.revokeRecoveryModals();
@@ -543,18 +605,37 @@ export class HeadingKeeperPlugin extends Plugin {
     this.currentPreview = null;
     this.previewWasInvalidated = false;
     try {
-      const files = this.app.vault
-        .getMarkdownFiles()
-        .slice()
-        .sort((left, right) =>
-          left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
-        );
-      const sources = await Promise.all(
-        files.map(async (file) => ({
-          path: file.path,
-          text: await this.app.vault.read(file),
-        })),
+      const targetText = await this.app.vault.read(active);
+      const numberingPlan = buildNumberingPlan(
+        scanHeadings(targetText),
+        this.settings,
       );
+      if (
+        this.settings.updateHeadingLinks &&
+        !this.metadataLinkIndex?.isReady
+      ) {
+        this.showNotice("notices.operationError");
+        return;
+      }
+      const fragments = numberingPlan.entries.map((entry) =>
+        entry.heading.rawText.trim(),
+      );
+      const candidatePaths = this.settings.updateHeadingLinks
+        ? (this.metadataLinkIndex?.candidates(active.path, fragments) ?? [])
+            .filter((path) => path !== active.path)
+            .sort((left, right) =>
+              left < right ? -1 : left > right ? 1 : 0,
+            )
+        : [];
+      const sources = [
+        { path: active.path, text: targetText },
+        ...(await Promise.all(
+          candidatePaths.map(async (path) => {
+            if (!this.vaultAdapter) throw new Error("vault-adapter-missing");
+            return { path, text: await this.vaultAdapter.read(path) };
+          }),
+        )),
+      ];
       if (!this.isPreviewRequestCurrent(generation, active.path)) return;
       const result = await buildWorkflowPreview(
         {
@@ -861,7 +942,6 @@ export class HeadingKeeperPlugin extends Plugin {
     }
     if (this.disposed) return;
     if (result.kind === "completed") {
-      this.headingLinkSync?.acceptCompleted(result.operation);
       this.previewWasInvalidated = false;
       await this.refreshVirtualRendering();
       if (!this.disposed) this.showNotice("notices.applyCompleted");
@@ -903,42 +983,19 @@ export class HeadingKeeperPlugin extends Plugin {
     );
   }
 
-  private async handleSavedHeadingModify(path: string): Promise<void> {
-    try {
-      const result = await this.headingLinkSync?.handleModify(path);
-      if (!result || this.disposed) return;
-      if (result.kind === "completed") {
-        await this.refreshVirtualRendering();
-        if (!this.disposed) this.showNotice("notices.linkSyncCompleted");
-      } else if (
-        result.kind === "unsafe" &&
-        result.reason !== "unchanged-headings"
-      ) {
-        this.showNotice("notices.linkSyncSkipped");
-      } else if (result.kind === "stale-plan") {
-        this.showNotice("notices.linkSyncStale");
-      } else if (result.kind === "recovery-required") {
-        this.showNotice("notices.applyRecovery");
-      } else if (result.kind === "journal-error") {
-        this.showNotice("notices.operationError");
-      }
-    } catch {
-      if (!this.disposed) this.showNotice("notices.operationError");
-    }
-  }
-
-  private async executeAutomaticLinkSync(
+  private async executeAutomaticMaintenance(
     operation: PersistedOperation,
   ): Promise<
     | Awaited<ReturnType<typeof executePersistedOperation>>
     | { readonly kind: "busy" }
   > {
+    const pending = this.dataStore?.recoveryOperations() ?? [];
     if (
       this.disposed ||
       !this.vaultAdapter ||
       !this.dataStore ||
       this.mutationAuthority !== null ||
-      this.dataStore.recoveryOperations().length > 0
+      pending.some((candidate) => candidate.id !== operation.id)
     ) {
       return { kind: "busy" };
     }
@@ -954,6 +1011,19 @@ export class HeadingKeeperPlugin extends Plugin {
     } finally {
       if (this.hasMutationAuthority(token, "link-sync", generation)) {
         this.releaseMutationAuthority(token);
+      }
+    }
+  }
+
+  private captureMetadataHeadings(): void {
+    this.metadataHeadings.clear();
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      const headings = this.app.metadataCache.getFileCache(file)?.headings;
+      if (headings) {
+        this.metadataHeadings.set(
+          file.path,
+          headings.map((heading) => heading.heading),
+        );
       }
     }
   }

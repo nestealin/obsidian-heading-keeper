@@ -32,5 +32,8 @@ export function snapshotOperation(
     state,
     files: Object.freeze(files),
     completedPaths: Object.freeze([...completedPaths]),
+    ...(operation.retry
+      ? { retry: Object.freeze({ ...operation.retry }) }
+      : {}),
   });
 }

@@ -106,10 +106,13 @@ export async function executePersistedOperation(
     if (durableSnapshot.state === "completed") {
       return { kind: "completed", operation: durableSnapshot };
     }
-    if (durableSnapshot.state !== "previewed") {
+    if (
+      durableSnapshot.state === "restoring" ||
+      durableSnapshot.state === "restored"
+    ) {
       return {
         kind: "recovery-required",
-        code: "operation-already-started",
+        code: "operation-conflict",
         operation: durableSnapshot,
       };
     }

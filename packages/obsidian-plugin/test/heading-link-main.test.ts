@@ -27,6 +27,28 @@ vi.mock("obsidian", () => {
         on: () => ({}),
       },
       metadataCache: {
+        getFileCache: (file: TFile) => {
+          const text = state.content.get(file.path) ?? "";
+          const headings = [...text.matchAll(/^#{1,6}\s+(.+)$/gm)].map(
+            (match) => ({
+              heading: match[1]!,
+              level: match[0]!.indexOf(" "),
+              position: {} as never,
+            }),
+          );
+          const links = [...text.matchAll(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)].map(
+            (match) => ({
+              link: match[1]!,
+              original: match[0],
+              position: {} as never,
+            }),
+          );
+          return { headings, links };
+        },
+        on: (name: string, callback: (...args: unknown[]) => unknown) => {
+          state.events.set(name, callback);
+          return {};
+        },
         getFirstLinkpathDest: (linkPath: string, sourcePath: string) => {
           if (linkPath === "" && sourcePath === "Target.md") {
             return new TFile("Target.md");
@@ -149,7 +171,7 @@ beforeEach(() => {
   state.content.clear();
   state.commands.clear();
   state.events.clear();
-  state.loadedData = undefined;
+  state.loadedData = { ...DEFAULT_STORED_SETTINGS, mode: "persisted" };
   state.notices.length = 0;
   state.modalOpens = 0;
   state.saves.length = 0;
@@ -164,12 +186,23 @@ describe("HeadingKeeper saved heading integration", () => {
     await plugin.onload();
 
     state.content.set("Target.md", "## New title\n");
-    await state.events.get("modify")?.(new TFile("Target.md"));
+    const target = new TFile("Target.md");
+    await state.events.get("changed")?.(
+      target,
+      "## New title\n",
+      {
+        headings: [
+          { heading: "New title", level: 2, position: {} as never },
+        ],
+      },
+    );
+    await state.events.get("modify")?.(target);
+    await maintenanceAccess(plugin).flush();
 
-    expect(state.writes).toEqual(["Refs.md"]);
-    expect(state.content.get("Target.md")).toBe("## New title\n");
-    expect(state.content.get("Refs.md")).toBe("[[Target#New title|alias]]");
-    expect(state.notices).toContain("Heading links updated.");
+    expect(state.writes).toEqual(["Target.md", "Refs.md"]);
+    expect(state.content.get("Target.md")).toBe("## 1. New title\n");
+    expect(state.content.get("Refs.md")).toBe("[[Target#1. New title|alias]]");
+    expect(state.notices).toEqual([]);
   });
 
   it("preserves all link sources for a compound heading change", async () => {
@@ -179,13 +212,20 @@ describe("HeadingKeeper saved heading integration", () => {
     await plugin.onload();
 
     state.content.set("Target.md", "## C\n## D\n");
-    await state.events.get("modify")?.(new TFile("Target.md"));
+    const target = new TFile("Target.md");
+    await state.events.get("changed")?.(target, "## C\n## D\n", {
+      headings: [
+        { heading: "C", level: 2, position: {} as never },
+        { heading: "D", level: 2, position: {} as never },
+      ],
+    });
+    await state.events.get("modify")?.(target);
+    await maintenanceAccess(plugin).flush();
 
-    expect(state.writes).toEqual([]);
+    expect(state.writes).toEqual(["Target.md"]);
+    expect(state.content.get("Target.md")).toBe("## 1. C\n## 2. D\n");
     expect(state.content.get("Refs.md")).toBe("[[Target#A]] [[Target#B]]");
-    expect(state.notices).toContain(
-      "Heading links were preserved because the rename was not unique.",
-    );
+    expect(state.notices).toEqual([]);
   });
 
   it("keeps snapshots current while automatic synchronization is disabled", async () => {
@@ -200,6 +240,7 @@ describe("HeadingKeeper saved heading integration", () => {
 
     state.content.set("Target.md", "## New\n");
     await state.events.get("modify")?.(new TFile("Target.md"));
+    await maintenanceAccess(plugin).flush();
 
     expect(state.writes).toEqual([]);
     expect(state.content.get("Refs.md")).toBe("[[Target#Old]]");
@@ -218,3 +259,8 @@ describe("HeadingKeeper saved heading integration", () => {
     expect(state.notices).toContain("Heading-link audit completed.");
   });
 });
+
+function maintenanceAccess(plugin: HeadingKeeperPlugin): { flush(): Promise<void> } {
+  return (plugin as unknown as { automaticMaintenance: { flush(): Promise<void> } })
+    .automaticMaintenance;
+}

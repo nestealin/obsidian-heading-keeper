@@ -31,6 +31,13 @@ export interface PersistedOperation {
   readonly state: OperationState;
   readonly files: readonly PlannedFileChange[];
   readonly completedPaths: readonly string[];
+  readonly retry?: OperationRetryState;
+}
+
+export interface OperationRetryState {
+  readonly attempts: number;
+  readonly nextAttemptAt: string;
+  readonly diagnosticCode: string;
 }
 
 export interface OperationSummary {

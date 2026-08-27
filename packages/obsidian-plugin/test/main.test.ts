@@ -32,6 +32,8 @@ vi.mock("obsidian", () => {
         on: () => ({}),
       },
       metadataCache: {
+        getFileCache: () => ({}),
+        on: () => ({}),
         getFirstLinkpathDest: () => null,
       },
       setting: {

@@ -398,7 +398,6 @@ describe("executePersistedOperation", () => {
   );
 
   it.each([
-    ["applying caller state", () => operation("applying")],
     ["restored caller state", () => operation("restored")],
     [
       "duplicate paths",

@@ -16,6 +16,7 @@ const state = vi.hoisted(() => ({
   }>,
   notices: [] as string[],
   readQueue: [] as Promise<string>[],
+  readPaths: [] as string[],
   reads: 0,
   savedData: [] as unknown[],
   saveQueue: [] as Promise<void>[],
@@ -104,6 +105,7 @@ vi.mock("obsidian", () => {
         on,
         read: async (target: TFile) => {
           state.reads += 1;
+          state.readPaths.push(target.path);
           const queued = state.readQueue.shift();
           if (queued) return queued;
           const text = state.files.get(target.path);
@@ -112,6 +114,18 @@ vi.mock("obsidian", () => {
         },
       },
       metadataCache: {
+        getFileCache: (target: TFile) => {
+          const markdown = state.files.get(target.path) ?? "";
+          return {
+            headings: [...markdown.matchAll(/^(#{1,6})\s+(.+)$/gm)].map(
+              (match) => ({ heading: match[2] ?? "" }),
+            ),
+            links: [...markdown.matchAll(/(?<!!)\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)].map(
+              (match) => ({ link: match[1] ?? "" }),
+            ),
+          };
+        },
+        on,
         getFirstLinkpathDest: (linkPath: string) =>
           file(state.linkTargets.get(linkPath) ?? null),
       },
@@ -258,6 +272,7 @@ beforeEach(() => {
   state.modalButtons.length = 0;
   state.notices.length = 0;
   state.readQueue.length = 0;
+  state.readPaths.length = 0;
   state.reads = 0;
   state.savedData.length = 0;
   state.saveQueue.length = 0;
@@ -292,7 +307,7 @@ describe("persisted plugin workflow", () => {
     await plugin.previewPersisted("remove");
     await plugin.applyCurrentPreview();
 
-    expect(state.reads).toBe(1);
+    expect(state.reads).toBe(0);
     expect(state.writes).toEqual([]);
     expect(state.notices).toEqual([
       "Switch to persisted mode first.",
@@ -314,10 +329,11 @@ describe("persisted plugin workflow", () => {
     expect(state.notices.at(-1)).toBe("No safe persisted changes were found.");
   });
 
-  it("previews and explicitly applies target and global link changes", async () => {
+  it("previews and explicitly applies target and indexed link changes", async () => {
     state.activePath = "Target.md";
     state.files.set("Target.md", "## Alpha");
     state.files.set("Links.md", "[[Target#Alpha|alias]]");
+    state.files.set("Unrelated.md", "No heading link here");
     state.linkTargets.set("Target", "Target.md");
     const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
@@ -325,6 +341,7 @@ describe("persisted plugin workflow", () => {
     await plugin.previewPersisted("add");
     expect(plugin.activePreview?.targetPath).toBe("Target.md");
     expect(state.modals).toHaveLength(1);
+    expect(state.readPaths).toEqual(["Target.md", "Links.md"]);
     await plugin.applyCurrentPreview();
 
     expect(state.files.get("Target.md")).toBe("## 1. Alpha");
@@ -584,11 +601,15 @@ describe("persisted plugin workflow", () => {
     await plugin.onload();
     await plugin.openRecoveryCenter();
 
-    expect(state.notices[0]).toBe("A persisted operation requires recovery.");
-    expect(state.modals).toHaveLength(1);
+    expect(state.files.get("Target.md")).toBe(afterText);
+    expect(state.writes).toEqual([]);
+    expect(state.notices.at(-1)).toBe(
+      "No persisted operation requires recovery.",
+    );
+    expect(state.modals).toHaveLength(0);
   });
 
-  it("uses one recovery authority across multiple modals and double clicks", async () => {
+  it("automatically finalizes an already-applied operation on reload", async () => {
     const beforeText = "## Alpha";
     const afterText = "## 1. Alpha";
     const operation = {
@@ -607,24 +628,15 @@ describe("persisted plugin workflow", () => {
     };
     const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
-    await plugin.openRecoveryCenter();
-    const firstModal = state.modals.at(-1) as { close(): void };
-    const first = state.modalButtons.at(-1);
 
-    firstModal.close();
-    first?.click();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(state.files.get("Target.md")).toBe(afterText);
     expect(state.writes).toEqual([]);
 
     await plugin.openRecoveryCenter();
-    const second = state.modalButtons.at(-1);
-    second?.click();
-    second?.click();
-    await vi.waitFor(() => {
-      expect(state.files.get("Target.md")).toBe(beforeText);
-    });
-
-    expect(state.writes).toEqual([["Target.md", beforeText]]);
+    expect(state.notices.at(-1)).toBe(
+      "No persisted operation requires recovery.",
+    );
+    expect(state.modals).toHaveLength(0);
   });
 
   it("revokes an old recovery callback before apply reaches a later link file", async () => {
@@ -679,7 +691,7 @@ describe("persisted plugin workflow", () => {
     ).toBe(true);
   });
 
-  it("rejects apply while recovery owns the global mutation authority", async () => {
+  it("completes recovered work before accepting a new manual mutation", async () => {
     const targetBefore = "## Alpha";
     const recovery = await recoveryOperation(
       "other-recovery",
@@ -698,19 +710,17 @@ describe("persisted plugin workflow", () => {
     const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     await plugin.previewPersisted("add");
-    await plugin.openRecoveryCenter();
-    const gate = deferred<void>();
-    state.writeGates.push({ path: "Other.md", promise: gate.promise });
-
-    state.modalButtons.at(-1)?.click();
     await plugin.applyCurrentPreview();
-    expect(state.files.get("Target.md")).toBe(targetBefore);
 
-    gate.resolve(undefined);
-    await vi.waitFor(() => {
-      expect(state.files.get("Other.md")).toBe("## Other");
-    });
-    expect(state.writes).toEqual([["Other.md", "## Other"]]);
+    expect(state.files.get("Other.md")).toBe("## 1. Other");
+    expect(state.files.get("Target.md")).toBe("## 1. Alpha");
+    expect(state.writes).toEqual([["Target.md", "## 1. Alpha"]]);
+    const modalCount = state.modals.length;
+    await plugin.openRecoveryCenter();
+    expect(state.notices.at(-1)).toBe(
+      "No persisted operation requires recovery.",
+    );
+    expect(state.modals).toHaveLength(modalCount);
   });
 
   it("invalidates recovery callbacks from different journals sharing a file", async () => {
@@ -798,7 +808,7 @@ describe("persisted plugin workflow", () => {
     expect(state.writes).toEqual([]);
   });
 
-  it("releases recovery authority after a restore failure", async () => {
+  it("releases automatic resume authority before a later manual apply", async () => {
     const recovery = await recoveryOperation(
       "failed-recovery",
       "Other.md",
@@ -816,22 +826,11 @@ describe("persisted plugin workflow", () => {
     const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
     await plugin.previewPersisted("add");
-    await plugin.openRecoveryCenter();
-    state.writeFailures.push({
-      path: "Other.md",
-      error: new Error("private restore detail"),
-    });
-
-    state.modalButtons.at(-1)?.click();
-    await vi.waitFor(() => {
-      expect(state.notices.at(-1)).toBe(
-        "Writing stopped. Open recovery before continuing.",
-      );
-    });
     await plugin.applyCurrentPreview();
 
+    expect(state.files.get("Other.md")).toBe("## 1. Other");
     expect(state.files.get("Target.md")).toBe("## 1. Alpha");
-    expect(state.notices.join("\n")).not.toContain("private restore detail");
+    expect(state.notices.join("\n")).not.toContain("private");
   });
 
   it("invalidates a recovery callback after unload", async () => {
@@ -861,7 +860,7 @@ describe("persisted plugin workflow", () => {
     expect(state.writes).toEqual([]);
   });
 
-  it("finalizes an all-pending recovery with zero vault writes", async () => {
+  it("automatically finishes an all-pending operation after reload", async () => {
     const beforeText = "## Alpha";
     const afterText = "## 1. Alpha";
     const operation = {
@@ -880,22 +879,21 @@ describe("persisted plugin workflow", () => {
     };
     const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
-    await plugin.openRecoveryCenter();
 
-    expect(state.modalButtons.at(-1)?.text).toBe("Complete recovery");
-    state.modalButtons.at(-1)?.click();
-    await vi.waitFor(() => {
-      const latest = state.savedData.at(-1) as {
-        summaries?: Array<{ id?: string; state?: string }>;
-      };
-      expect(
-        latest.summaries?.find((summary) => summary.id === "pending-only")
-          ?.state,
-      ).toBe("restored");
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(state.writes).toEqual([]);
-    expect(state.modals).toHaveLength(1);
+    expect(state.files.get("Target.md")).toBe(afterText);
+    expect(state.writes).toEqual([["Target.md", afterText]]);
+    const latest = state.savedData.at(-1) as {
+      summaries?: Array<{ id?: string; state?: string }>;
+    };
+    expect(
+      latest.summaries?.find((summary) => summary.id === "pending-only")
+        ?.state,
+    ).toBe("completed");
+    await plugin.openRecoveryCenter();
+    expect(state.notices.at(-1)).toBe(
+      "No persisted operation requires recovery.",
+    );
+    expect(state.modals).toHaveLength(0);
   });
 
   it("drops a late preview callback after unload", async () => {

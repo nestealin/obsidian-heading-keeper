@@ -38,7 +38,12 @@ function validState(
 ): boolean {
   if (!operationStates.includes(state)) return false;
   if (mode === "execute-caller") {
-    return state === "previewed" || state === "completed";
+    return (
+      state === "previewed" ||
+      state === "applying" ||
+      state === "recovery-required" ||
+      state === "completed"
+    );
   }
   if (mode === "restore") return restoreStates.includes(state);
   return true;
@@ -102,6 +107,15 @@ function structurallyValid(
     operation.createdAt.length === 0 ||
     operation.files.length === 0 ||
     !validState(operation.state, mode)
+  ) {
+    return false;
+  }
+  if (
+    operation.retry &&
+    (!Number.isSafeInteger(operation.retry.attempts) ||
+      operation.retry.attempts < 1 ||
+      !Number.isFinite(Date.parse(operation.retry.nextAttemptAt)) ||
+      operation.retry.diagnosticCode.length === 0)
   ) {
     return false;
   }

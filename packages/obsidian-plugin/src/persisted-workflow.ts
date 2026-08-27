@@ -6,6 +6,7 @@ import {
   type NumberingPlanEntry,
 } from "@heading-keeper/core";
 import {
+  normalizeHeadingFragment,
   planRenameScopedLinkChanges,
   type HeadingRename,
   type LinkDiagnosticCode,
@@ -35,6 +36,7 @@ export interface WorkflowPreviewInput {
     sourcePath: string,
     linkPath: string,
   ) => ResolvedTarget;
+  readonly additionalRenames?: readonly HeadingRename[];
 }
 
 export const WORKFLOW_REASON_CODES = [
@@ -182,6 +184,36 @@ function additionRenames(
   );
 }
 
+function composeRenames(
+  numberingRenames: readonly HeadingRename[],
+  additionalRenames: readonly HeadingRename[],
+): HeadingRename[] {
+  const finalHeading = (rename: HeadingRename): string => {
+    let current = rename.newHeading;
+    const visited = new Set<string>();
+    while (true) {
+      const normalized = normalizeHeadingFragment(current);
+      if (!normalized.ok || visited.has(normalized.value)) return current;
+      visited.add(normalized.value);
+      const next = numberingRenames.find((candidate) => {
+        if (candidate.targetPath !== rename.targetPath) return false;
+        const oldHeading = normalizeHeadingFragment(candidate.oldHeading);
+        return oldHeading.ok && oldHeading.value === normalized.value;
+      });
+      if (!next) return current;
+      current = next.newHeading;
+    }
+  };
+
+  return [
+    ...numberingRenames,
+    ...additionalRenames.map((rename) => ({
+      ...rename,
+      newHeading: finalHeading(rename),
+    })),
+  ];
+}
+
 export async function buildWorkflowPreview(
   input: WorkflowPreviewInput,
   dependencies: BuildPersistedOperationDependencies,
@@ -202,10 +234,14 @@ export async function buildWorkflowPreview(
     input.kind === "remove"
       ? removalArtifacts(numberingPlan, input.targetPath)
       : { edits: [] as PlannedTextEdit[], renames: [] as HeadingRename[] };
-  const renames =
+  const numberingRenames =
     input.kind === "add"
       ? additionRenames(numberingPlan, input.targetPath)
       : removal.renames;
+  const renames = composeRenames(
+    numberingRenames,
+    input.additionalRenames ?? [],
+  );
 
   const preserved: PreviewPreservedItem[] = [];
   const skips: PreviewPreservedItem[] = [];

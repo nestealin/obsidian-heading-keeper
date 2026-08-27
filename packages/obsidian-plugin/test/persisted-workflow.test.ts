@@ -114,6 +114,38 @@ describe("buildWorkflowPreview", () => {
     ]);
   });
 
+  it("composes a direct title rename with its automatic numbering rename", async () => {
+    const result = await buildWorkflowPreview(
+      {
+        kind: "add",
+        targetPath: "Target.md",
+        sources: [
+          { path: "Target.md", text: "## New title" },
+          { path: "Links.md", text: "[[Target#Old title|alias]]" },
+        ],
+        settings,
+        additionalRenames: [
+          {
+            targetPath: "Target.md",
+            oldHeading: "Old title",
+            newHeading: "New title",
+          },
+        ],
+        resolveTarget: () => ({ kind: "file", path: "Target.md" }),
+      },
+      deps,
+    );
+
+    expect(result.kind).toBe("preview");
+    if (result.kind !== "preview") return;
+    expect(after("## New title", result.operation.files[0])).toBe(
+      "## 1. New title",
+    );
+    expect(
+      after("[[Target#Old title|alias]]", result.operation.files[1]),
+    ).toBe("[[Target#1. New title|alias]]");
+  });
+
   it.each([
     ["Wiki", "## Alpha\n## [[#Alpha]]", "## 1. Alpha\n## 2. [[#1. Alpha]]"],
     [
