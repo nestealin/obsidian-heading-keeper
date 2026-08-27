@@ -51,16 +51,36 @@ export interface BuildLinkOnlyOperationInput {
   readonly linkSources: readonly LinkSourcePlanInput[];
 }
 
-function prefixInsertionEdit(edit: PlannedTextEdit): PlannedTextEdit {
-  if (!edit.replacementText.endsWith(edit.expectedText)) {
-    throw new PersistedPlanError("invalid-target-plan");
+function minimalTextEdit(edit: PlannedTextEdit): PlannedTextEdit {
+  let prefixLength = 0;
+  while (
+    prefixLength < edit.expectedText.length &&
+    prefixLength < edit.replacementText.length &&
+    edit.expectedText[prefixLength] === edit.replacementText[prefixLength]
+  ) {
+    prefixLength += 1;
+  }
+  let suffixLength = 0;
+  while (
+    suffixLength < edit.expectedText.length - prefixLength &&
+    suffixLength < edit.replacementText.length - prefixLength &&
+    edit.expectedText[edit.expectedText.length - 1 - suffixLength] ===
+      edit.replacementText[edit.replacementText.length - 1 - suffixLength]
+  ) {
+    suffixLength += 1;
   }
   return {
-    range: { from: edit.range.from, to: edit.range.from },
-    expectedText: "",
+    range: {
+      from: edit.range.from + prefixLength,
+      to: edit.range.to - suffixLength,
+    },
+    expectedText: edit.expectedText.slice(
+      prefixLength,
+      edit.expectedText.length - suffixLength,
+    ),
     replacementText: edit.replacementText.slice(
-      0,
-      edit.replacementText.length - edit.expectedText.length,
+      prefixLength,
+      edit.replacementText.length - suffixLength,
     ),
   };
 }
@@ -105,7 +125,7 @@ export async function buildPersistedOperation(
   }
   const targetNumberingInsertions =
     input.target.numberingMaterialization === "insert"
-      ? targetNumberingEdits.map(prefixInsertionEdit)
+      ? targetNumberingEdits.map(minimalTextEdit)
       : [];
   const files = new Map<string, MutableFilePlan>();
   files.set(targetPath, {
@@ -150,7 +170,7 @@ export async function buildPersistedOperation(
   if (materialized.length === 0) return { kind: "no-op" };
 
   // applyPlan remains the authority for target-plan integrity. Persisted writes
-  // replay only the verified prefix insertion so nested heading-link edits can
+  // replay only the minimal verified numbering difference so nested heading-link edits can
   // compose without weakening the complete-plan check.
   if (
     input.target.numberingMaterialization === "insert" &&

@@ -146,6 +146,53 @@ describe("buildWorkflowPreview", () => {
     );
   });
 
+  it("plans a mixed clean, semantic numeric, stale-prefix, and indexed-link note", async () => {
+    const target = [
+      "# v0.2 automatic",
+      "",
+      "## Alpha",
+      "",
+      "### Child",
+      "",
+      "## 2026 Review",
+      "",
+      "## 7. Stale prefix",
+      "",
+    ].join("\n");
+    const refs = [
+      "# v0.2 references",
+      "",
+      "[[../V02-Automatic#Alpha|wiki alias]]",
+      "",
+      '[label](../V02-Automatic.md#Child "title")',
+      "",
+    ].join("\n");
+    const result = await buildWorkflowPreview(
+      {
+        kind: "add",
+        targetPath: "00_HeadingKeeper验收语料/V02-Automatic.md",
+        sources: [
+          {
+            path: "00_HeadingKeeper验收语料/V02-Automatic.md",
+            text: target,
+          },
+          {
+            path: "00_HeadingKeeper验收语料/Refs/V02-Links.md",
+            text: refs,
+          },
+        ],
+        settings,
+        resolveTarget: () => ({
+          kind: "file",
+          path: "00_HeadingKeeper验收语料/V02-Automatic.md",
+        }),
+      },
+      deps,
+    );
+
+    expect(result.kind).toBe("preview");
+  });
+
   it.each([
     ["Wiki", "## Alpha\n## [[#Alpha]]", "## 1. Alpha\n## 2. [[#1. Alpha]]"],
     [
