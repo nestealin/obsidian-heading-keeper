@@ -445,7 +445,10 @@ export class HeadingKeeperPlugin extends Plugin {
       this.app.vault.on("modify", (file) => {
         this.invalidatePersistedPreview();
         if (!(file instanceof TFile) || file.extension !== "md") return;
-        if (this.settings.mode === "persisted") {
+        if (
+          this.settings.mode === "persisted" &&
+          this.app.workspace.getActiveFile()?.path === file.path
+        ) {
           this.automaticMaintenance?.schedule(file.path, "modify");
         }
       }),
@@ -460,7 +463,10 @@ export class HeadingKeeperPlugin extends Plugin {
           );
           this.metadataLinkIndex?.update(file, cache);
           this.metadataHeadings.set(file.path, after);
-          if (this.settings.mode === "persisted") {
+          if (
+            this.settings.mode === "persisted" &&
+            this.app.workspace.getActiveFile()?.path === file.path
+          ) {
             this.automaticMaintenance?.acceptMetadataChange(
               file.path,
               before,
@@ -484,7 +490,10 @@ export class HeadingKeeperPlugin extends Plugin {
           const headings = this.metadataHeadings.get(oldPath);
           this.metadataHeadings.delete(oldPath);
           if (headings) this.metadataHeadings.set(file.path, headings);
-          if (this.settings.mode === "persisted") {
+          if (
+            this.settings.mode === "persisted" &&
+            this.app.workspace.getActiveFile()?.path === file.path
+          ) {
             this.automaticMaintenance?.schedule(file.path, "modify");
           }
         } else {

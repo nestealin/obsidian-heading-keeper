@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_STORED_SETTINGS } from "../src/settings.js";
 
 const state = vi.hoisted(() => ({
+  activePath: null as string | null,
   content: new Map<string, string>(),
   commands: new Map<string, () => unknown>(),
   events: new Map<string, (...args: unknown[]) => unknown>(),
@@ -23,7 +24,10 @@ vi.mock("obsidian", () => {
   class Plugin {
     app = {
       workspace: {
-        getActiveFile: () => null,
+        getActiveFile: () =>
+          state.activePath && state.content.has(state.activePath)
+            ? new TFile(state.activePath)
+            : null,
         on: () => ({}),
       },
       metadataCache: {
@@ -174,6 +178,7 @@ import {
 import { HeadingKeeperPlugin } from "../src/main.js";
 
 beforeEach(() => {
+  state.activePath = null;
   state.content.clear();
   state.commands.clear();
   state.events.clear();
@@ -186,6 +191,7 @@ beforeEach(() => {
 
 describe("HeadingKeeper saved heading integration", () => {
   it("updates resolved heading links after one direct saved title rename", async () => {
+    state.activePath = "Target.md";
     state.content.set("Target.md", "## Old title\n");
     state.content.set("Refs.md", "[[Target#Old title|alias]]");
     const plugin = new HeadingKeeperPlugin();
@@ -206,6 +212,7 @@ describe("HeadingKeeper saved heading integration", () => {
   });
 
   it("preserves all link sources for a compound heading change", async () => {
+    state.activePath = "Target.md";
     state.content.set("Target.md", "## A\n## B\n");
     state.content.set("Refs.md", "[[Target#A]] [[Target#B]]");
     const plugin = new HeadingKeeperPlugin();
@@ -226,6 +233,27 @@ describe("HeadingKeeper saved heading integration", () => {
     expect(state.content.get("Target.md")).toBe("## 1. C\n## 2. D\n");
     expect(state.content.get("Refs.md")).toBe("[[Target#A]] [[Target#B]]");
     expect(state.notices).toEqual([]);
+  });
+
+  it("does not maintain a modified Markdown note that is not currently open", async () => {
+    state.activePath = "Active.md";
+    state.content.set("Active.md", "## Active\n");
+    state.content.set("Target.md", "## Old title\n");
+    state.content.set("Refs.md", "[[Target#Old title|alias]]");
+    const plugin = new HeadingKeeperPlugin();
+    await plugin.onload();
+
+    state.content.set("Target.md", "## New title\n");
+    const target = new TFile("Target.md");
+    await state.events.get("changed")?.(target, "## New title\n", {
+      headings: [{ heading: "New title", level: 2, position: {} as never }],
+    });
+    await state.events.get("modify")?.(target);
+    await maintenanceAccess(plugin).flush();
+
+    expect(state.writes).toEqual([]);
+    expect(state.content.get("Target.md")).toBe("## New title\n");
+    expect(state.content.get("Refs.md")).toBe("[[Target#Old title|alias]]");
   });
 
   it("keeps snapshots current while automatic synchronization is disabled", async () => {
