@@ -669,16 +669,12 @@ describe("persisted plugin workflow", () => {
     expect(state.files.get("Links.md")).toBe("[[Target#1. Alpha]]");
     expect(state.writes).not.toContainEqual(["Target.md", targetBefore]);
     const latest = state.savedData.at(-1) as {
-      journals?: Record<
-        string,
-        { files?: Array<{ path: string }>; state?: string }
-      >;
+      summaries?: Array<{ state?: string; fileCount?: number }>;
     };
     expect(
-      Object.values(latest.journals ?? {}).some(
+      (latest.summaries ?? []).some(
         (operation) =>
-          operation.state === "completed" &&
-          operation.files?.some((file) => file.path === "Links.md"),
+          operation.state === "completed" && operation.fileCount === 2,
       ),
     ).toBe(true);
   });
@@ -890,9 +886,12 @@ describe("persisted plugin workflow", () => {
     state.modalButtons.at(-1)?.click();
     await vi.waitFor(() => {
       const latest = state.savedData.at(-1) as {
-        journals?: Record<string, { state?: string }>;
+        summaries?: Array<{ id?: string; state?: string }>;
       };
-      expect(latest.journals?.["pending-only"]?.state).toBe("restored");
+      expect(
+        latest.summaries?.find((summary) => summary.id === "pending-only")
+          ?.state,
+      ).toBe("restored");
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(state.writes).toEqual([]);

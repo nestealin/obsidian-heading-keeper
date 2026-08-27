@@ -33,6 +33,16 @@ export interface PersistedOperation {
   readonly completedPaths: readonly string[];
 }
 
+export interface OperationSummary {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly completedAt: string;
+  readonly state: "completed" | "restored";
+  readonly fileCount: number;
+  readonly editCount: number;
+  readonly diagnosticCode: string | null;
+}
+
 export interface VaultFileAdapter {
   read(path: string): Promise<string>;
   compareAndUpdate(
@@ -52,6 +62,14 @@ export type CompareAndUpdateResult =
 export interface JournalStore {
   load(id: string): Promise<PersistedOperation | null>;
   save(operation: PersistedOperation): Promise<void>;
+  listPending(): readonly PersistedOperation[];
+  savePending(operation: PersistedOperation): Promise<void>;
+  complete(
+    operation: PersistedOperation,
+    diagnosticCode?: string,
+  ): Promise<void>;
+  remove(id: string): Promise<void>;
+  summaries(): readonly OperationSummary[];
 }
 
 export type HashText = (text: string) => Promise<string>;

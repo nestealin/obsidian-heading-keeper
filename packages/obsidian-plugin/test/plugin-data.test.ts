@@ -38,6 +38,76 @@ async function operation(
 }
 
 describe("PluginDataStore", () => {
+  it("replaces completed journals with text-free summaries", async () => {
+    const saves: unknown[] = [];
+    const store = new PluginDataStore(
+      async () => undefined,
+      async (value) => saves.push(value),
+      sha256Text,
+      () => Date.parse("2026-08-27T00:00:00.000Z"),
+    );
+    await store.initialize();
+
+    await store.journal.save(await operation("done", "completed"));
+
+    const serialized = JSON.stringify(saves.at(-1));
+    expect(serialized).not.toContain('"edits"');
+    expect(serialized).not.toContain('"inverseEdits"');
+    expect(saves.at(-1)).toMatchObject({
+      journals: {},
+      summaries: [
+        {
+          id: "done",
+          completedAt: "2026-08-27T00:00:00.000Z",
+          state: "completed",
+          fileCount: 1,
+          editCount: 1,
+        },
+      ],
+    });
+  });
+
+  it("rejects a payload above one MiB without changing committed state", async () => {
+    const saves: unknown[] = [];
+    const store = new PluginDataStore(
+      async () => undefined,
+      async (value) => saves.push(value),
+      sha256Text,
+    );
+    await store.initialize();
+    const oversized = await operation("oversized", "applying");
+    const huge = "x".repeat(1_048_576);
+    const file = oversized.files[0]!;
+    const candidate = {
+      ...oversized,
+      files: [
+        {
+          ...file,
+          edits: [
+            {
+              range: { from: 0, to: 0 },
+              expectedText: "",
+              replacementText: huge,
+            },
+          ],
+          inverseEdits: [
+            {
+              range: { from: 0, to: huge.length },
+              expectedText: huge,
+              replacementText: "",
+            },
+          ],
+        },
+      ],
+    };
+
+    await expect(store.journal.save(candidate)).rejects.toThrow(
+      "storage-limit",
+    );
+    await expect(store.journal.load("oversized")).resolves.toBeNull();
+    expect(saves).toEqual([]);
+  });
+
   it("loads fresh defaults without reporting settings errors", async () => {
     const store = new PluginDataStore(
       async () => undefined,
@@ -67,6 +137,7 @@ describe("PluginDataStore", () => {
       settings: expect.objectContaining({ locale: "zh", mode: "persisted" }),
       journals: {},
       latestJournalId: null,
+      summaries: [],
     });
   });
 
@@ -96,6 +167,51 @@ describe("PluginDataStore", () => {
     });
   });
 
+  it("migrates a valid v0.1 full-text recovery into minimal edits", async () => {
+    const beforeText = "## Alpha\nprivate body marker";
+    const afterText = "## 1. Alpha\nprivate body marker";
+    const saves: unknown[] = [];
+    const legacy = {
+      id: "legacy",
+      createdAt: "2026-08-26T00:00:00.000Z",
+      state: "recovery-required",
+      completedPaths: ["Target.md"],
+      files: [
+        {
+          path: "Target.md",
+          beforeText,
+          beforeHash: await sha256Text(beforeText),
+          afterText,
+          afterHash: await sha256Text(afterText),
+          role: "target",
+        },
+      ],
+    };
+    const store = new PluginDataStore(
+      async () => ({
+        settings: DEFAULT_STORED_SETTINGS,
+        journals: { legacy },
+        latestJournalId: "legacy",
+      }),
+      async (value) => saves.push(value),
+      sha256Text,
+    );
+
+    const loaded = await store.initialize();
+    const migrated = store.latestRecoveryOperation();
+
+    expect(loaded.diagnostics).toEqual(["journal-migrated"]);
+    expect(migrated?.files[0]?.edits).toEqual([
+      {
+        range: { from: 3, to: 3 },
+        expectedText: "",
+        replacementText: "1. ",
+      },
+    ]);
+    expect(saves).toHaveLength(1);
+    expect(JSON.stringify(saves.at(-1))).not.toContain("private body marker");
+  });
+
   it("serializes concurrent settings and journal saves without clobbering", async () => {
     const saves: unknown[] = [];
     const store = new PluginDataStore(
@@ -118,6 +234,7 @@ describe("PluginDataStore", () => {
       settings: expect.objectContaining({ mode: "persisted" }),
       journals: { "op-1": expect.objectContaining({ id: "op-1" }) },
       latestJournalId: "op-1",
+      summaries: [],
     });
   });
 
