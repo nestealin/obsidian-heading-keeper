@@ -114,11 +114,6 @@ export function extractObsidianHeadingLinkRecords(
     for (const reference of references) {
       const hash = reference.link.indexOf("#");
       if (hash < 0) {
-        diagnostics.push({
-          sourcePath: file.path,
-          link: reference.link,
-          code: "missing-heading-fragment",
-        });
         continue;
       }
       const linkPath = reference.link.slice(0, hash);

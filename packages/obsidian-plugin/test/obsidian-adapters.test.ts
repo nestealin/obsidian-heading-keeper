@@ -104,6 +104,11 @@ describe("Obsidian adapters", () => {
             ? {
                 links: [
                   {
+                    link: "Target",
+                    original: "[[Target]]",
+                    position: {} as never,
+                  },
+                  {
                     link: "Target#Old%20title",
                     original: "[[Target#Old%20title]]",
                     position: {} as never,
@@ -128,5 +133,6 @@ describe("Obsidian adapters", () => {
     expect(bodyReads).toBe(0);
     expect(index.isReady).toBe(true);
     expect(index.candidates("Target.md", ["Old title"])).toEqual(["Refs.md"]);
+    expect(index.diagnostics).toEqual([]);
   });
 });
