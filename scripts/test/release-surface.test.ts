@@ -148,12 +148,36 @@ describe("release surface", () => {
     );
     expect(coreIdentity).toContain('version: "0.2.0"');
 
-    expect(await readFile(join(repositoryRoot, "manifest.json"), "utf8")).toBe(
+    const rootManifestText = await readFile(
+      join(repositoryRoot, "manifest.json"),
+      "utf8",
+    );
+    const rootManifest = JSON.parse(rootManifestText) as Record<
+      string,
+      unknown
+    >;
+    expect(rootManifestText).toBe(
       await readFile(
         join(repositoryRoot, "packages/obsidian-plugin/manifest.json"),
         "utf8",
       ),
     );
+    expect(rootManifest).toMatchObject({
+      author: "nestealin",
+      description:
+        "Keep heading numbers and heading-fragment links coherent with conservative, recoverable updates.",
+      id: "heading-keeper",
+      isDesktopOnly: false,
+      minAppVersion: "1.12.7",
+      name: "Heading Keeper",
+      version: "0.2.0",
+    });
+    expect(rootManifest.id).toMatch(/^[a-z0-9-]+$/u);
+    expect(String(rootManifest.id)).not.toContain("obsidian");
+    expect(String(rootManifest.id)).not.toMatch(/plugin$/u);
+    expect(String(rootManifest.name)).not.toMatch(/obsidian|plugin/iu);
+    expect(String(rootManifest.description).length).toBeLessThanOrEqual(250);
+    expect(String(rootManifest.description)).toMatch(/\.$/u);
     expect(await readFile(join(repositoryRoot, "versions.json"), "utf8")).toBe(
       await readFile(
         join(repositoryRoot, "packages/obsidian-plugin/versions.json"),
@@ -165,6 +189,9 @@ describe("release surface", () => {
     expect(readme).toContain("public community plugin");
     expect(readme).toContain("closed beta");
     expect(readme).not.toContain("private-test build");
+    expect(await readFile(join(repositoryRoot, "LICENSE"), "utf8")).toContain(
+      "MIT License",
+    );
 
     const persistenceTypes = await readFile(
       join(repositoryRoot, "packages/obsidian-plugin/src/persistence/types.ts"),
