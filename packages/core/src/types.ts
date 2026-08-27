@@ -2,7 +2,12 @@ export type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 
 export type GapStrategy = "zero-fill" | "one-fill" | "compact" | "skip";
 
-export type Ownership = "absent" | "exact" | "semantic" | "ambiguous";
+export type Ownership =
+  | "absent"
+  | "exact"
+  | "managed-stale"
+  | "semantic"
+  | "ambiguous";
 
 export type PlannedAction =
   | "decorate"

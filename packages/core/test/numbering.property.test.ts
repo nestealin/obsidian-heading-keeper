@@ -136,8 +136,8 @@ describe("numbering properties", () => {
     );
   });
 
-  it("preserves semantic and ambiguous titles byte for byte", () => {
-    const protectedTitle = fc.oneof(
+  it("numbers semantic titles and canonicalizes stale managed prefixes", () => {
+    const titleCase = fc.oneof(
       fc
         .constantFrom(
           "2024. Roadmap",
@@ -147,14 +147,22 @@ describe("numbering properties", () => {
           "8080 service",
           "3.14 radians",
         )
-        .map((title) => ({ title, ownership: "semantic" as const })),
+        .map((title) => ({
+          title,
+          ownership: "semantic" as const,
+          expected: `## 1. ${title}\n`,
+        })),
       fc
         .constantFrom("9. Old candidate", "7.2. Candidate", "42. Candidate")
-        .map((title) => ({ title, ownership: "ambiguous" as const })),
+        .map((title) => ({
+          title,
+          ownership: "managed-stale" as const,
+          expected: `## 1. ${title.slice(title.indexOf(". ") + 2)}\n`,
+        })),
     );
 
     fc.assert(
-      fc.property(protectedTitle, ({ title, ownership }) => {
+      fc.property(titleCase, ({ title, ownership, expected }) => {
         const markdown = `## ${title}\n`;
         const plan = buildNumberingPlan(
           scanHeadings(markdown),
@@ -162,9 +170,20 @@ describe("numbering properties", () => {
         );
 
         expect(plan.entries[0]?.ownership).toBe(ownership);
-        expect(applyPlan(markdown, plan)).toBe(markdown);
+        expect(applyPlan(markdown, plan)).toBe(expected);
       }),
       { numRuns: 1000 },
     );
+  });
+
+  it("preserves numeric text that does not use the configured title separator", () => {
+    const markdown = "## 42 Candidate\n";
+    const plan = buildNumberingPlan(scanHeadings(markdown), DEFAULT_SETTINGS);
+
+    expect(plan.entries[0]).toMatchObject({
+      ownership: "ambiguous",
+      action: "preserve",
+    });
+    expect(applyPlan(markdown, plan)).toBe(markdown);
   });
 });

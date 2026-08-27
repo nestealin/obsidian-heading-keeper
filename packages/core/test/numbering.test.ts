@@ -154,7 +154,7 @@ describe("buildNumberingPlan", () => {
     }
   });
 
-  it("uses ownership to choose only conservative plan actions", () => {
+  it("uses ownership to choose canonical plan actions", () => {
     const plan = buildNumberingPlan(
       scanHeadings(
         [
@@ -176,9 +176,40 @@ describe("buildNumberingPlan", () => {
     ).toEqual([
       { displayPrefix: "1", ownership: "exact", action: "preserve" },
       { displayPrefix: "2", ownership: "absent", action: "insert" },
-      { displayPrefix: "3", ownership: "semantic", action: "preserve" },
-      { displayPrefix: "4", ownership: "ambiguous", action: "preserve" },
+      { displayPrefix: "3", ownership: "semantic", action: "insert" },
+      {
+        displayPrefix: "4",
+        ownership: "managed-stale",
+        action: "replace",
+      },
     ]);
+  });
+
+  it("replaces stale managed prefixes and numbers semantic titles without losing text", () => {
+    const markdown = [
+      "## 9. Old title",
+      "## 2024. Roadmap",
+      "## Overview",
+      "",
+    ].join("\n");
+    const plan = buildNumberingPlan(scanHeadings(markdown), DEFAULT_SETTINGS);
+
+    expect(
+      plan.entries.map(({ displayPrefix, ownership, action }) => ({
+        displayPrefix,
+        ownership,
+        action,
+      })),
+    ).toEqual([
+      { displayPrefix: "1", ownership: "managed-stale", action: "replace" },
+      { displayPrefix: "2", ownership: "semantic", action: "insert" },
+      { displayPrefix: "3", ownership: "absent", action: "insert" },
+    ]);
+    expect(applyPlan(markdown, plan)).toBe(
+      ["## 1. Old title", "## 2. 2024. Roadmap", "## 3. Overview", ""].join(
+        "\n",
+      ),
+    );
   });
 
   it("captures and uses custom numbering format for ownership", () => {
@@ -194,7 +225,7 @@ describe("buildNumberingPlan", () => {
     ).toEqual([
       { ownership: "exact", action: "preserve" },
       { ownership: "exact", action: "preserve" },
-      { ownership: "ambiguous", action: "preserve" },
+      { ownership: "managed-stale", action: "replace" },
     ]);
   });
 
@@ -238,8 +269,8 @@ describe("applyPlan", () => {
       [
         "## 1. Overview",
         "## 2. Existing",
-        "## 2024. Roadmap",
-        "## 9. Old candidate",
+        "## 3. 2024. Roadmap",
+        "## 4. Old candidate",
         "",
       ].join("\n"),
     );
@@ -252,8 +283,8 @@ describe("applyPlan", () => {
     ).toEqual([
       { action: "insert", hasEdit: true },
       { action: "preserve", hasEdit: false },
-      { action: "preserve", hasEdit: false },
-      { action: "preserve", hasEdit: false },
+      { action: "insert", hasEdit: true },
+      { action: "replace", hasEdit: true },
     ]);
   });
 

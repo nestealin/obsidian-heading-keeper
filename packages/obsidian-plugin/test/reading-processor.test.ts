@@ -5,6 +5,7 @@ import {
   decorateReadingHeadings,
   planReadingDecorations,
   registerReadingRoot,
+  splitReadingPrefix,
 } from "../src/reading-processor.js";
 import { planEditorDecorations } from "../src/editor-extension.js";
 
@@ -88,6 +89,15 @@ function readingRoot(levels: number[]): FakeElement {
 const firstSection = { lineEnd: 0, lineStart: 0 };
 
 describe("Reading virtual decorations", () => {
+  it("splits only the managed source prefix from rendered heading text", () => {
+    expect(splitReadingPrefix("9. Old title", 3)).toEqual({
+      hidden: "9. ",
+      visible: "Old title",
+    });
+    expect(splitReadingPrefix("9. Old title", 0)).toBeNull();
+    expect(splitReadingPrefix("9. Old title", 99)).toBeNull();
+  });
+
   it("has prefix parity with editor decorations for CRLF and Unicode headings", () => {
     const markdown = [
       "---",
@@ -134,6 +144,20 @@ describe("Reading virtual decorations", () => {
         lineStart: 1,
       }),
     ).toEqual({ diagnostics: [], prefixes: [{ index: 0, text: "2. " }] });
+  });
+
+  it("plans replacement of stale visible prefixes without removing semantic title text", () => {
+    expect(
+      planReadingDecorations(
+        "## 9. Old title\n## 2024. Roadmap",
+        DEFAULT_STORED_SETTINGS,
+        [2, 2],
+        { lineEnd: 1, lineStart: 0 },
+      ).prefixes,
+    ).toEqual([
+      { index: 0, replaceCharacters: 3, text: "1. " },
+      { index: 1, text: "2. " },
+    ]);
   });
 
   it("preserves hierarchy for a non-first section with a different heading level", () => {

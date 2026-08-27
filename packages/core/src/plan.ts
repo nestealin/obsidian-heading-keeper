@@ -1,5 +1,5 @@
 import { scanHeadings } from "./scanner.js";
-import { classifyOwnership } from "./ownership.js";
+import { analyzeHeadingPrefix, classifyOwnership } from "./ownership.js";
 import type {
   NumberingFormat,
   NumberingPlan,
@@ -191,12 +191,15 @@ function validateEntryIntegrity(
     );
   }
 
-  if (
-    entry.action === "replace" ||
-    entry.action === "decorate" ||
-    (entry.action === "insert" && ownership !== "absent") ||
-    (entry.action === "preserve" && ownership === "absent")
-  ) {
+  const validAction =
+    entry.action !== "decorate" &&
+    (entry.action === "skip" ||
+      (entry.action === "insert" &&
+        (ownership === "absent" || ownership === "semantic")) ||
+      (entry.action === "replace" && ownership === "managed-stale") ||
+      (entry.action === "preserve" &&
+        (ownership === "exact" || ownership === "ambiguous")));
+  if (!validAction) {
     throw new StalePlanError(
       "unsafe-edit",
       `Plan entry ${entryIndex} action is not valid for its verified ownership.`,
@@ -210,7 +213,7 @@ function validateEditContract(
   format: Readonly<NumberingFormat>,
   entryIndex: number,
 ): TextEdit | undefined {
-  const changesText = entry.action === "insert";
+  const changesText = entry.action === "insert" || entry.action === "replace";
   if (changesText && !entry.edit) {
     throw new StalePlanError(
       "missing-edit",
@@ -245,7 +248,14 @@ function validateEditContract(
       entryIndex,
     );
   }
-  const expectedReplacement = `${entry.displayPrefix}${format.titleSeparator}${entry.edit.expectedText}`;
+  const analysis = analyzeHeadingPrefix(
+    entry.heading,
+    entry.displayPrefix,
+    format,
+  );
+  const expectedReplacement = `${entry.displayPrefix}${format.titleSeparator}${
+    entry.action === "replace" ? analysis.logicalTitle : entry.edit.expectedText
+  }`;
   if (entry.edit.replacementText !== expectedReplacement) {
     throw new StalePlanError(
       "unsafe-edit",

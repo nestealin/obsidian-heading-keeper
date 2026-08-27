@@ -6,7 +6,7 @@ import type {
   NumberingSettings,
   PlanDiagnostic,
 } from "./types.js";
-import { classifyOwnership } from "./ownership.js";
+import { analyzeHeadingPrefix, classifyOwnership } from "./ownership.js";
 
 export class NumberingOverflowError extends Error {
   readonly code = "counter-overflow" as const;
@@ -216,7 +216,8 @@ export function buildNumberingPlan(
       displayPrefix = segments.join(settings.numberSeparator);
     }
     usedPrefixes.add(displayPrefix);
-    const ownership = classifyOwnership(heading, displayPrefix, format);
+    const analysis = analyzeHeadingPrefix(heading, displayPrefix, format);
+    const { ownership } = analysis;
     const reason =
       ownership === "absent"
         ? "Heading has no visible numeric prefix."
@@ -224,7 +225,9 @@ export function buildNumberingPlan(
           ? "Heading already has the computed numeric prefix."
           : ownership === "semantic"
             ? "Heading starts with protected semantic numeric text."
-            : "Heading starts with an unowned numeric prefix candidate.";
+            : ownership === "managed-stale"
+              ? "Heading has a stale managed numeric prefix."
+              : "Heading starts with an unowned numeric prefix candidate.";
 
     if (ownership === "ambiguous") {
       diagnostics.push({
@@ -240,9 +243,14 @@ export function buildNumberingPlan(
       segments,
       displayPrefix,
       ownership,
-      action: ownership === "absent" ? "insert" : "preserve",
+      action:
+        ownership === "absent" || ownership === "semantic"
+          ? "insert"
+          : ownership === "managed-stale"
+            ? "replace"
+            : "preserve",
       reason,
-      ...(ownership === "absent"
+      ...(ownership === "absent" || ownership === "semantic"
         ? {
             edit: {
               range: heading.contentRange,
@@ -250,7 +258,15 @@ export function buildNumberingPlan(
               replacementText: `${displayPrefix}${settings.titleSeparator}${heading.rawText}`,
             },
           }
-        : {}),
+        : ownership === "managed-stale"
+          ? {
+              edit: {
+                range: heading.contentRange,
+                expectedText: heading.rawText,
+                replacementText: `${displayPrefix}${settings.titleSeparator}${analysis.logicalTitle}`,
+              },
+            }
+          : {}),
     });
   }
 

@@ -11,7 +11,11 @@ export type {
   UnsafeHeadingRenameReason,
 } from "./heading-rename.js";
 export { buildNumberingPlan, NumberingOverflowError } from "./numbering.js";
-export { classifyOwnership } from "./ownership.js";
+export {
+  analyzeHeadingPrefix,
+  classifyOwnership,
+  type HeadingPrefixAnalysis,
+} from "./ownership.js";
 export { applyPlan, StalePlanError } from "./plan.js";
 export type { StalePlanCode } from "./plan.js";
 export type {

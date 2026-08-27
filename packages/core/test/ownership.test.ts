@@ -59,15 +59,17 @@ describe("classifyOwnership", () => {
         { title: `${repeatedDigits}y`, expectedPrefix: "2", format },
         { title: `${repeatedDigits}xTitle`, expectedPrefix: "2", format },
       ]),
-    ).resolves.toEqual(["absent", "ambiguous"]);
+    ).resolves.toEqual(["absent", "managed-stale"]);
   });
 
   it("recognizes only a complete visible prefix equal to the computed prefix", () => {
     expect(classifyOwnership(heading("1.2. Managed"), "1.2")).toBe("exact");
     expect(classifyOwnership(heading("1.2.3. Managed"), "1.2")).toBe(
-      "ambiguous",
+      "managed-stale",
     );
-    expect(classifyOwnership(heading("2.1. Managed"), "1.2")).toBe("ambiguous");
+    expect(classifyOwnership(heading("2.1. Managed"), "1.2")).toBe(
+      "managed-stale",
+    );
   });
 
   it("recognizes an exact prefix followed by a custom title separator", () => {
@@ -97,8 +99,20 @@ describe("classifyOwnership", () => {
       "exact",
     );
     expect(classifyOwnership(heading("9-8:Managed"), "1-2", format)).toBe(
-      "ambiguous",
+      "managed-stale",
     );
+  });
+
+  it("classifies a different configured numeric prefix as stale managed numbering", () => {
+    expect(classifyOwnership(heading("9. Old title"), "2")).toBe(
+      "managed-stale",
+    );
+    expect(
+      classifyOwnership(heading("9-8:Old title"), "1-2", {
+        numberSeparator: "-",
+        titleSeparator: ":",
+      }),
+    ).toBe("managed-stale");
   });
 
   it.each(["999.1.1.1", "1.2.3.4.5"])(
@@ -154,7 +168,13 @@ describe("classifyOwnership", () => {
             ...DEFAULT_SETTINGS,
             ...format,
           });
-          const validOwnership = ["absent", "exact", "semantic", "ambiguous"];
+          const validOwnership = [
+            "absent",
+            "exact",
+            "managed-stale",
+            "semantic",
+            "ambiguous",
+          ];
 
           expect(validOwnership).toContain(ownership);
           expect(validOwnership).toContain(plan.entries[0]?.ownership);
@@ -180,10 +200,13 @@ describe("classifyOwnership", () => {
     },
   );
 
-  it("treats other leading numeric-dot candidates as ambiguous", () => {
+  it("treats configured numeric prefixes as managed and other numeric text conservatively", () => {
     expect(classifyOwnership(heading("7.2. Candidate"), "1.1")).toBe(
-      "ambiguous",
+      "managed-stale",
     );
-    expect(classifyOwnership(heading("42. Candidate"), "1")).toBe("ambiguous");
+    expect(classifyOwnership(heading("42. Candidate"), "1")).toBe(
+      "managed-stale",
+    );
+    expect(classifyOwnership(heading("42 Candidate"), "1")).toBe("ambiguous");
   });
 });

@@ -8,6 +8,7 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import {
+  analyzeHeadingPrefix,
   buildNumberingPlan,
   scanHeadings,
   type NumberingSettings,
@@ -16,6 +17,7 @@ import {
 export interface EditorPrefix {
   from: number;
   text: string;
+  to?: number;
 }
 
 export const refreshHeadingKeeper = StateEffect.define<void>();
@@ -28,13 +30,22 @@ export function planEditorDecorations(
 ): EditorPrefix[] {
   const plan = buildNumberingPlan(scanHeadings(markdown), settings);
   return plan.entries.flatMap((entry) => {
-    if (entry.action !== "insert" || entry.displayPrefix === "") {
+    if (
+      (entry.action !== "insert" && entry.action !== "replace") ||
+      entry.displayPrefix === ""
+    ) {
       return [];
     }
+    const analysis = analyzeHeadingPrefix(
+      entry.heading,
+      entry.displayPrefix,
+      plan.format,
+    );
     return [
       {
-        from: entry.heading.contentRange.from,
+        from: analysis.managedRange?.from ?? entry.heading.contentRange.from,
         text: `${entry.displayPrefix}${plan.format.titleSeparator}`,
+        ...(analysis.managedRange ? { to: analysis.managedRange.to } : {}),
       },
     ];
   });
@@ -71,12 +82,12 @@ function createDecorations(
     getSettings(),
   );
   return Decoration.set(
-    prefixes.map((prefix) =>
-      Decoration.widget({
-        widget: new PrefixWidget(prefix.text),
-        side: -1,
-      }).range(prefix.from),
-    ),
+    prefixes.map((prefix) => {
+      const widget = new PrefixWidget(prefix.text);
+      return prefix.to === undefined
+        ? Decoration.widget({ widget, side: -1 }).range(prefix.from)
+        : Decoration.replace({ widget }).range(prefix.from, prefix.to);
+    }),
     true,
   );
 }

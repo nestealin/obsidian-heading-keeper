@@ -1,4 +1,5 @@
 import {
+  analyzeHeadingPrefix,
   buildNumberingPlan,
   scanHeadings,
   type NumberingPlan,
@@ -132,27 +133,33 @@ function removalArtifacts(
   const edits: PlannedTextEdit[] = [];
   const renames: HeadingRename[] = [];
   for (const entry of plan.entries) {
-    if (entry.ownership !== "exact") continue;
-    const prefix = `${entry.displayPrefix}${plan.format.titleSeparator}`;
+    if (entry.ownership !== "exact" && entry.ownership !== "managed-stale") {
+      continue;
+    }
+    const analysis = analyzeHeadingPrefix(
+      entry.heading,
+      entry.displayPrefix,
+      plan.format,
+    );
+    if (!analysis.managedRange) continue;
     const raw = entry.heading.rawText;
-    const leadingLength = raw.length - raw.trimStart().length;
+    const relativeFrom =
+      analysis.managedRange.from - entry.heading.contentRange.from;
+    const relativeTo =
+      analysis.managedRange.to - entry.heading.contentRange.from;
+    const prefix = raw.slice(relativeFrom, relativeTo);
     const edit: PlannedTextEdit = {
-      range: {
-        from: entry.heading.contentRange.from + leadingLength,
-        to: entry.heading.contentRange.from + leadingLength + prefix.length,
-      },
+      range: analysis.managedRange,
       expectedText: prefix,
       replacementText: "",
     };
-    if (raw.slice(leadingLength, leadingLength + prefix.length) !== prefix) {
-      continue;
-    }
     edits.push(edit);
     const oldHeading = raw.trim();
     renames.push({
       targetPath,
       oldHeading,
-      newHeading: raw.trimStart().slice(prefix.length).trimEnd(),
+      newHeading:
+        `${raw.slice(0, relativeFrom)}${raw.slice(relativeTo)}`.trim(),
     });
   }
   return { edits, renames };

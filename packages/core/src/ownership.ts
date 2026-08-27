@@ -1,4 +1,9 @@
-import type { HeadingNode, NumberingFormat, Ownership } from "./types.js";
+import type {
+  HeadingNode,
+  NumberingFormat,
+  Ownership,
+  SourceRange,
+} from "./types.js";
 
 const DEFAULT_FORMAT: Readonly<NumberingFormat> = Object.freeze({
   numberSeparator: ".",
@@ -76,23 +81,75 @@ export function classifyOwnership(
   expectedPrefix: string,
   format: Readonly<NumberingFormat> = DEFAULT_FORMAT,
 ): Ownership {
+  return analyzeHeadingPrefix(node, expectedPrefix, format).ownership;
+}
+
+export interface HeadingPrefixAnalysis {
+  readonly ownership: Ownership;
+  readonly logicalTitle: string;
+  readonly managedRange: SourceRange | null;
+}
+
+function formattedNumericPrefix(
+  text: string,
+  format: Readonly<NumberingFormat>,
+): string | null {
+  let cursor = 0;
+  while (cursor < text.length && /[0-9]/u.test(text[cursor] ?? "")) {
+    cursor += 1;
+  }
+  if (cursor === 0) return null;
+
+  while (text.startsWith(format.numberSeparator, cursor)) {
+    const segmentStart = cursor + format.numberSeparator.length;
+    let segmentEnd = segmentStart;
+    while (segmentEnd < text.length && /[0-9]/u.test(text[segmentEnd] ?? "")) {
+      segmentEnd += 1;
+    }
+    if (segmentEnd === segmentStart) break;
+    cursor = segmentEnd;
+  }
+
+  return text.startsWith(format.titleSeparator, cursor)
+    ? text.slice(0, cursor)
+    : null;
+}
+
+export function analyzeHeadingPrefix(
+  node: HeadingNode,
+  expectedPrefix: string,
+  format: Readonly<NumberingFormat> = DEFAULT_FORMAT,
+): HeadingPrefixAnalysis {
+  const leadingLength = node.rawText.length - node.rawText.trimStart().length;
   const text = node.rawText.trimStart();
 
   if (isSemanticNumericForm(text, format.titleSeparator)) {
-    return "semantic";
+    return { ownership: "semantic", logicalTitle: text, managedRange: null };
   }
 
-  if (
-    expectedPrefix.length > 0 &&
-    text.startsWith(`${expectedPrefix}${format.titleSeparator}`)
-  ) {
-    return "exact";
+  const managedPrefix = formattedNumericPrefix(text, format);
+  if (managedPrefix !== null) {
+    const managedRange = {
+      from: node.contentRange.from + leadingLength,
+      to:
+        node.contentRange.from +
+        leadingLength +
+        managedPrefix.length +
+        format.titleSeparator.length,
+    };
+    return {
+      ownership: managedPrefix === expectedPrefix ? "exact" : "managed-stale",
+      logicalTitle: text.slice(
+        managedPrefix.length + format.titleSeparator.length,
+      ),
+      managedRange,
+    };
   }
 
   const firstCodeUnit = text.charCodeAt(0);
   const startsWithAsciiDigit = firstCodeUnit >= 48 && firstCodeUnit <= 57;
   if (startsWithAsciiDigit && text.indexOf(format.titleSeparator, 1) !== -1) {
-    return "ambiguous";
+    return { ownership: "ambiguous", logicalTitle: text, managedRange: null };
   }
 
   const standardNumericChain = /^\d+(?:\.\d+)+/u.exec(text)?.[0];
@@ -102,13 +159,13 @@ export function classifyOwnership(
       standardNumericChain,
       format.titleSeparator,
     )
-      ? "semantic"
-      : "ambiguous";
+      ? { ownership: "semantic", logicalTitle: text, managedRange: null }
+      : { ownership: "ambiguous", logicalTitle: text, managedRange: null };
   }
 
   if (/^\d+(?:\s|$)/u.test(text)) {
-    return "ambiguous";
+    return { ownership: "ambiguous", logicalTitle: text, managedRange: null };
   }
 
-  return "absent";
+  return { ownership: "absent", logicalTitle: text, managedRange: null };
 }

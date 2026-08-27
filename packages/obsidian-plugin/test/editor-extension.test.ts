@@ -37,6 +37,18 @@ describe("editor virtual decorations", () => {
     ).toEqual(["1. ", "1.1.1. ", "1.1.1.1.1.1. "]);
   });
 
+  it("visually replaces stale managed numbering and prefixes semantic titles", () => {
+    expect(
+      planEditorDecorations(
+        "## 9. Old title\n## 2024. Roadmap\n",
+        DEFAULT_STORED_SETTINGS,
+      ),
+    ).toEqual([
+      { from: 3, to: 6, text: "1. " },
+      { from: 19, text: "2. " },
+    ]);
+  });
+
   it("creates a decoration-only CodeMirror extension", () => {
     expect(
       createHeadingKeeperExtension(() => DEFAULT_STORED_SETTINGS),

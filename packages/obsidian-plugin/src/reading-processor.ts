@@ -1,4 +1,5 @@
 import {
+  analyzeHeadingPrefix,
   buildNumberingPlan,
   scanHeadings,
   type NumberingSettings,
@@ -6,6 +7,7 @@ import {
 
 export interface ReadingPrefix {
   index: number;
+  replaceCharacters?: number;
   text: string;
 }
 
@@ -31,6 +33,7 @@ export interface ReadingDecorationPlan {
 
 interface OwnedRoot {
   prefixes: Set<HTMLElement>;
+  replacements: Array<{ hidden: string; node: Text }>;
   section: ReadingSection | null;
   sourcePath: string;
 }
@@ -103,7 +106,12 @@ function registerRoot(
 ): OwnedRoot {
   let ownedRoot = ownedRoots.get(root);
   if (!ownedRoot) {
-    ownedRoot = { prefixes: new Set<HTMLElement>(), section, sourcePath };
+    ownedRoot = {
+      prefixes: new Set<HTMLElement>(),
+      replacements: [],
+      section,
+      sourcePath,
+    };
     ownedRoots.set(root, ownedRoot);
   } else {
     ownedRoot.section = section;
@@ -205,28 +213,85 @@ export function planReadingDecorations(
   }
 
   const prefixes = entries.flatMap((entry, index) => {
-    if (entry.action !== "insert" || entry.displayPrefix === "") {
+    if (
+      (entry.action !== "insert" && entry.action !== "replace") ||
+      entry.displayPrefix === ""
+    ) {
       return [];
     }
+    const analysis = analyzeHeadingPrefix(
+      entry.heading,
+      entry.displayPrefix,
+      plan.format,
+    );
     return [
       {
         index,
         text: `${entry.displayPrefix}${plan.format.titleSeparator}`,
+        ...(analysis.managedRange
+          ? {
+              replaceCharacters:
+                analysis.managedRange.to - analysis.managedRange.from,
+            }
+          : {}),
       },
     ];
   });
   return { diagnostics: [], prefixes };
 }
 
+export function splitReadingPrefix(
+  text: string,
+  replaceCharacters: number,
+): { hidden: string; visible: string } | null {
+  if (
+    !Number.isInteger(replaceCharacters) ||
+    replaceCharacters <= 0 ||
+    replaceCharacters > text.length
+  ) {
+    return null;
+  }
+  return {
+    hidden: text.slice(0, replaceCharacters),
+    visible: text.slice(replaceCharacters),
+  };
+}
+
+function firstTextNode(heading: HTMLElement): Text | null {
+  const createTreeWalker = heading.ownerDocument.createTreeWalker;
+  if (typeof createTreeWalker !== "function") return null;
+  const candidate = createTreeWalker
+    .call(heading.ownerDocument, heading, 4)
+    .nextNode();
+  return candidate?.nodeType === 3 ? (candidate as Text) : null;
+}
+
+function replaceReadingSourcePrefix(
+  heading: HTMLElement,
+  replaceCharacters: number,
+  ownedRoot: OwnedRoot,
+): void {
+  const node = firstTextNode(heading);
+  if (!node) return;
+  const split = splitReadingPrefix(node.data, replaceCharacters);
+  if (!split) return;
+  node.data = split.visible;
+  ownedRoot.replacements.push({ hidden: split.hidden, node });
+}
+
 export function clearHeadingKeeperPrefixes(root: HTMLElement): void {
-  const prefixes = ownedRoots.get(root)?.prefixes;
-  if (!prefixes) {
+  const ownedRoot = ownedRoots.get(root);
+  if (!ownedRoot) {
     return;
   }
-  for (const prefix of prefixes) {
+  for (const prefix of ownedRoot.prefixes) {
     prefix.remove();
   }
-  prefixes.clear();
+  ownedRoot.prefixes.clear();
+  for (const replacement of ownedRoot.replacements) {
+    replacement.node.data = replacement.hidden + replacement.node.data;
+  }
+  ownedRoot.replacements.length = 0;
 }
 
 export function disposeReadingRoot(root: HTMLElement): void {
@@ -257,6 +322,9 @@ export function decorateReadingHeadings(
     const heading = headings[prefix.index];
     if (!heading) {
       continue;
+    }
+    if (prefix.replaceCharacters !== undefined) {
+      replaceReadingSourcePrefix(heading, prefix.replaceCharacters, ownedRoot);
     }
     const element = root.ownerDocument.createElement("span");
     element.className = "heading-keeper-prefix";

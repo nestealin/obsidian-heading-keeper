@@ -396,6 +396,11 @@ describe("buildWorkflowPreview", () => {
         expectedText: "1. ",
         replacementText: "",
       },
+      {
+        range: { from: 50, to: 53 },
+        expectedText: "9. ",
+        replacementText: "",
+      },
     ]);
     expect(result.operation.files).toHaveLength(1);
     expect(result.operation.files[0]?.afterText).toBe(
@@ -404,13 +409,12 @@ describe("buildWorkflowPreview", () => {
         "## Alpha",
         "## Beta",
         "## 2026. Roadmap",
-        "## 9. Old candidate",
+        "## Old candidate",
       ].join("\n"),
     );
     expect(result.groups.preserved).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ code: "semantic-prefix" }),
-        expect.objectContaining({ code: "ambiguous-prefix" }),
       ]),
     );
     expect(result.groups.skips).toEqual([
