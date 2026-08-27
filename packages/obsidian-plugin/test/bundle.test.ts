@@ -42,6 +42,8 @@ describe("production bundle surface", () => {
     expect(bundle).not.toContain(
       "Unrecognized extension value in extension set",
     );
+    expect(bundle).toContain("file-open");
+    expect(bundle).toContain("recovery-required");
 
     runInNewContext(bundle, {
       exports: module.exports,

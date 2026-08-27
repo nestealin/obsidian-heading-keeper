@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const repositoryRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const pluginDirectory = join(repositoryRoot, "packages/obsidian-plugin");
-const artifact = join(repositoryRoot, "artifacts/heading-keeper-0.1.0.zip");
+const artifact = join(repositoryRoot, "artifacts/heading-keeper-0.2.0.zip");
 const assetNames = ["main.js", "manifest.json", "versions.json"];
 const crcTable = Uint32Array.from({ length: 256 }, (_, value) => {
   let crc = value;

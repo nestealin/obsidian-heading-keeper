@@ -10,7 +10,7 @@ const repositoryRoot = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "../..",
 );
-const artifact = join(repositoryRoot, "artifacts/heading-keeper-0.1.0.zip");
+const artifact = join(repositoryRoot, "artifacts/heading-keeper-0.2.0.zip");
 const packageScript = join(repositoryRoot, "scripts/package-plugin.mjs");
 const releaseRejectedScript = join(
   repositoryRoot,
@@ -125,6 +125,49 @@ async function deploymentDirectory(): Promise<string> {
 }
 
 describe("release surface", () => {
+  it("keeps version 0.2.0 aligned across every release identity", async () => {
+    const paths = [
+      "package.json",
+      "packages/core/package.json",
+      "packages/link-core/package.json",
+      "packages/obsidian-plugin/package.json",
+      "packages/obsidian-plugin/manifest.json",
+    ];
+    const versions = await Promise.all(
+      paths.map(async (path) =>
+        JSON.parse(await readFile(join(repositoryRoot, path), "utf8")),
+      ),
+    );
+    expect(versions.map((value) => value.version)).toEqual(
+      paths.map(() => "0.2.0"),
+    );
+    const coreIdentity = await readFile(
+      join(repositoryRoot, "packages/core/src/index.ts"),
+      "utf8",
+    );
+    expect(coreIdentity).toContain('version: "0.2.0"');
+
+    const persistenceTypes = await readFile(
+      join(repositoryRoot, "packages/obsidian-plugin/src/persistence/types.ts"),
+      "utf8",
+    );
+    const plannedFile =
+      /export interface PlannedFileChange \{([\s\S]*?)\n\}/u.exec(
+        persistenceTypes,
+      )?.[1];
+    expect(plannedFile).toBeDefined();
+    expect(plannedFile).not.toContain("beforeText");
+    expect(plannedFile).not.toContain("afterText");
+
+    const mainSource = await readFile(
+      join(repositoryRoot, "packages/obsidian-plugin/src/main.ts"),
+      "utf8",
+    );
+    expect(mainSource).toContain("ObsidianMetadataLinkIndex");
+    expect(mainSource).toContain("AutomaticMaintenance");
+    expect(mainSource).not.toContain("SavedHeadingLinkSync");
+  });
+
   it("packages the three release assets into a byte-stable valid ZIP", async () => {
     const firstResult = run(packageScript);
     expect(firstResult.status).toBe(0);
@@ -239,6 +282,9 @@ describe("release surface", () => {
 
     expect(versions[manifest.version]).toBe(manifest.minAppVersion);
     expect(bundle).not.toContain("sourceMappingURL");
+    expect(bundle).toContain("file-open");
+    expect(bundle).toContain("recovery-required");
+    expect(bundle).not.toContain("SavedHeadingLinkSync");
     expect(bundle).not.toMatch(
       /require\(["'](?:node:)?(?:assert|buffer|child_process|crypto|fs|http|https|net|path|process|stream|url|util|worker_threads)["']\)|require\(["']electron["']\)|(?:fetch|XMLHttpRequest|WebSocket)\s*\(/iu,
     );
