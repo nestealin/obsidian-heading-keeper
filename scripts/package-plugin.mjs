@@ -8,6 +8,11 @@ const repositoryRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const pluginDirectory = join(repositoryRoot, "packages/obsidian-plugin");
 const artifact = join(repositoryRoot, "artifacts/heading-keeper-0.2.0.zip");
 const assetNames = ["main.js", "manifest.json", "versions.json"];
+const assetPaths = new Map([
+  ["main.js", join(pluginDirectory, "main.js")],
+  ["manifest.json", join(repositoryRoot, "manifest.json")],
+  ["versions.json", join(repositoryRoot, "versions.json")],
+]);
 const crcTable = Uint32Array.from({ length: 256 }, (_, value) => {
   let crc = value;
   for (let bit = 0; bit < 8; bit += 1) {
@@ -89,11 +94,9 @@ async function packagePlugin() {
   const entries = [];
   let offset = 0;
   for (const name of assetNames) {
-    const entry = zipEntry(
-      name,
-      await readFile(join(pluginDirectory, name)),
-      offset,
-    );
+    const source = assetPaths.get(name);
+    if (!source) throw new Error(`Missing release source for ${name}.`);
+    const entry = zipEntry(name, await readFile(source), offset);
     entries.push(entry);
     offset += entry.local.length;
   }

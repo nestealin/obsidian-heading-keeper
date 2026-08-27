@@ -128,6 +128,7 @@ describe("release surface", () => {
   it("keeps version 0.2.0 aligned across every release identity", async () => {
     const paths = [
       "package.json",
+      "manifest.json",
       "packages/core/package.json",
       "packages/link-core/package.json",
       "packages/obsidian-plugin/package.json",
@@ -146,6 +147,24 @@ describe("release surface", () => {
       "utf8",
     );
     expect(coreIdentity).toContain('version: "0.2.0"');
+
+    expect(await readFile(join(repositoryRoot, "manifest.json"), "utf8")).toBe(
+      await readFile(
+        join(repositoryRoot, "packages/obsidian-plugin/manifest.json"),
+        "utf8",
+      ),
+    );
+    expect(await readFile(join(repositoryRoot, "versions.json"), "utf8")).toBe(
+      await readFile(
+        join(repositoryRoot, "packages/obsidian-plugin/versions.json"),
+        "utf8",
+      ),
+    );
+
+    const readme = await readFile(join(repositoryRoot, "README.md"), "utf8");
+    expect(readme).toContain("public community plugin");
+    expect(readme).toContain("closed beta");
+    expect(readme).not.toContain("private-test build");
 
     const persistenceTypes = await readFile(
       join(repositoryRoot, "packages/obsidian-plugin/src/persistence/types.ts"),

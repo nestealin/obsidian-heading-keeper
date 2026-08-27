@@ -11,9 +11,12 @@ heading-fragment links coherent.
 - Historical broken links remain read-only until the user chooses an exact
   target and confirms the complete repair selection.
 
-Version `0.2.0` remains a private-test build and starts in virtual mode. It is
-intended to become a generally installable community plugin; local Vault habits
-are acceptance inputs, not product-wide feature rules.
+Heading Keeper is developed as a general-purpose public community plugin.
+Version `0.2.0` is in closed beta and starts in virtual mode. Closed beta limits
+who receives the current build while it stabilizes; it does not define a
+private-only product, storage format, or feature scope. The source repository
+and Community directory listing will be opened after the beta gate passes.
+Local Vault habits are acceptance inputs, not product-wide feature rules.
 
 ## Runtime behavior
 
@@ -56,7 +59,13 @@ the sole heading writer in isolated test Vault, but has not been installed into 
 Vault. A batch whole-Vault numbering migration is not a replacement
 prerequisite.
 
-## Internal-test installation
+## Installation status
+
+The stable public release will be installed from Obsidian's Community plugins
+directory. During the closed beta, designated test Vaults use the manual
+installation below; no separate private edition exists.
+
+## Closed-beta installation
 
 Build the three release assets:
 
@@ -78,3 +87,6 @@ After copying, verify the installed bytes:
 ```bash
 corepack pnpm verify:deployment <vault>/.obsidian/plugins/heading-keeper
 ```
+
+The repository root also carries `README.md`, `LICENSE`, `manifest.json`, and
+`versions.json` in the layout required for the later public source release.

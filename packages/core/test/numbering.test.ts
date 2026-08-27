@@ -90,6 +90,43 @@ describe("buildNumberingPlan", () => {
     ]);
   });
 
+  it("matches the accepted Number Headings H3-H5 Arabic-dot profile", () => {
+    const markdown = [
+      "## Unnumbered section",
+      "### First",
+      "#### Child",
+      "##### Grandchild",
+      "###### Below configured range",
+      "### Second",
+      "## Next section",
+      "### Restart",
+      "",
+    ].join("\n");
+    const plan = buildNumberingPlan(scanHeadings(markdown), {
+      ...DEFAULT_SETTINGS,
+      topLevel: 3,
+      bottomLevel: 5,
+      startAt: 1,
+      numberSeparator: ".",
+      titleSeparator: ". ",
+      gapStrategy: "compact",
+    });
+
+    expect(applyPlan(markdown, plan)).toBe(
+      [
+        "## Unnumbered section",
+        "### 1. First",
+        "#### 1.1. Child",
+        "##### 1.1.1. Grandchild",
+        "###### Below configured range",
+        "### 2. Second",
+        "## Next section",
+        "### 1. Restart",
+        "",
+      ].join("\n"),
+    );
+  });
+
   it("skip resumes after a valid parent and emits a stable diagnostic", () => {
     const headings = scanHeadings(
       "## Root\n#### Missing parent\n### Parent\n#### Recovered\n",

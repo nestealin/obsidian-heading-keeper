@@ -1,0 +1,9 @@
+{
+  "id": "heading-keeper",
+  "name": "Heading Keeper",
+  "version": "0.2.0",
+  "minAppVersion": "1.12.7",
+  "description": "Keep heading numbers and heading-fragment links coherent with conservative, recoverable updates.",
+  "author": "nestealin",
+  "isDesktopOnly": false
+}
