@@ -54,10 +54,13 @@ The workspace keeps Markdown parsing and numbering logic in
 
 Version `0.2.0` has automated and isolated isolated test Vault coverage for silent persisted
 maintenance, per-file concurrency protection, restart recovery, bounded plugin
-data, incremental reverse-link indexing, and guided repair. It is approved as
-the sole heading writer in isolated test Vault, but has not been installed into the main
-Vault. A batch whole-Vault numbering migration is not a replacement
-prerequisite.
+data, incremental reverse-link indexing, and guided repair. It is now also the
+sole enabled heading writer in the main desktop test Vault desktop Vault, where virtual
+rendering, silent open/save reconciliation, insertion reorder, direct heading
+rename, Wiki and Markdown link synchronization, plugin reload, and unrelated
+file byte stability passed. A batch whole-Vault numbering migration is not a
+replacement prerequisite. Mobile and long-running cross-device behavior remain
+separate observation gates.
 
 ## Installation status
 
