@@ -14,6 +14,7 @@ vi.mock("obsidian", () => ({
 import { TFile } from "obsidian";
 import {
   createObsidianLinkResolver,
+  ObsidianMetadataLinkIndex,
   ObsidianVaultFileAdapter,
 } from "../src/obsidian-adapters.js";
 
@@ -87,5 +88,45 @@ describe("Obsidian adapters", () => {
       ["Target", "Source.md"],
       ["Missing", "Source.md"],
     ]);
+  });
+
+  it("builds the reverse link index from metadata without reading note bodies", () => {
+    const target = new TFile("Target.md");
+    const refs = new TFile("Refs.md");
+    let cacheReads = 0;
+    let bodyReads = 0;
+    const index = new ObsidianMetadataLinkIndex(
+      { getMarkdownFiles: () => [target, refs] },
+      {
+        getFileCache: (file) => {
+          cacheReads += 1;
+          return file.path === "Refs.md"
+            ? {
+                links: [
+                  {
+                    link: "Target#Old%20title",
+                    original: "[[Target#Old%20title]]",
+                    position: {} as never,
+                  },
+                ],
+              }
+            : {};
+        },
+        getFirstLinkpathDest: (linkPath) =>
+          linkPath === "Target" ? target : null,
+      },
+    );
+    const unrelatedVaultReader = async () => {
+      bodyReads += 1;
+      return "private";
+    };
+
+    index.rebuild();
+
+    expect(unrelatedVaultReader).toBeDefined();
+    expect(cacheReads).toBe(2);
+    expect(bodyReads).toBe(0);
+    expect(index.isReady).toBe(true);
+    expect(index.candidates("Target.md", ["Old title"])).toEqual(["Refs.md"]);
   });
 });
