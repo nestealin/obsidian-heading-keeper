@@ -5,6 +5,7 @@ export {
 } from "./planner.js";
 export { scanHeadingLinks } from "./tokenizer.js";
 export { auditHeadingLinks } from "./audit.js";
+export { buildRepairPlan } from "./repair.js";
 export { LINK_DIAGNOSTIC_CODES } from "./types.js";
 export type {
   FragmentNormalization,
@@ -24,4 +25,12 @@ export type {
   HeadingLinkAuditInput,
   HeadingLinkAuditResult,
   HeadingLinkAuditSource,
+  HeadingLinkRepairCandidate,
 } from "./audit.js";
+export type {
+  HeadingLinkRepairDiagnostic,
+  HeadingLinkRepairEdit,
+  HeadingLinkRepairInput,
+  HeadingLinkRepairPlan,
+  HeadingLinkRepairSelection,
+} from "./repair.js";

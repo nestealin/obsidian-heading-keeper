@@ -50,7 +50,9 @@ export class AutomaticMaintenance {
   private tail: Promise<void> = Promise.resolve();
   private disposed = false;
 
-  constructor(private readonly dependencies: AutomaticMaintenanceDependencies) {}
+  constructor(
+    private readonly dependencies: AutomaticMaintenanceDependencies,
+  ) {}
 
   schedule(path: string, _reason: MaintenanceReason): void {
     if (this.disposed) return;
@@ -138,7 +140,10 @@ export class AutomaticMaintenance {
       this.schedule(path, "modify");
       return;
     }
-    const numberingPlan = buildNumberingPlan(scanHeadings(targetText), settings);
+    const numberingPlan = buildNumberingPlan(
+      scanHeadings(targetText),
+      settings,
+    );
     const extra = this.additionalRenames.get(path) ?? [];
     const oldFragments = [
       ...numberingPlan.entries.flatMap((entry) =>
@@ -260,10 +265,13 @@ export class AutomaticMaintenance {
   ): void {
     const previous = this.retryTimers.get(operation.id);
     if (previous !== undefined) this.clearTimer(previous);
-    const timer = this.setTimer(() => {
-      this.retryTimers.delete(operation.id);
-      void this.enqueueOperation(operation);
-    }, Math.min(delayMs, MAX_RETRY_DELAY_MS));
+    const timer = this.setTimer(
+      () => {
+        this.retryTimers.delete(operation.id);
+        void this.enqueueOperation(operation);
+      },
+      Math.min(delayMs, MAX_RETRY_DELAY_MS),
+    );
     this.retryTimers.set(operation.id, timer);
   }
 
@@ -306,4 +314,3 @@ function isStructuralConflict(code: string): boolean {
 function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
-

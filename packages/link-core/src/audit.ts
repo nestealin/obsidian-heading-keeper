@@ -21,11 +21,21 @@ export interface HeadingLinkAuditSource {
 }
 
 export interface HeadingLinkAuditFinding {
+  readonly id: string;
   readonly sourcePath: string;
   readonly code: HeadingLinkAuditCode;
   readonly fragment: string;
+  readonly rawTarget: string;
+  readonly line: number;
   readonly sourceRange: SourceRange;
   readonly targetPath?: string;
+  readonly candidates: readonly HeadingLinkRepairCandidate[];
+  readonly repairEligibility: "selection-required" | "not-repairable";
+}
+
+export interface HeadingLinkRepairCandidate {
+  readonly targetPath: string;
+  readonly headings: readonly string[];
 }
 
 export interface HeadingLinkAuditInput {
@@ -77,11 +87,27 @@ function finding(
   code: HeadingLinkAuditCode,
   fragment: string,
   sourceRange: SourceRange,
+  rawTarget: string,
+  line: number,
   targetPath?: string,
+  candidates: readonly HeadingLinkRepairCandidate[] = [],
 ): HeadingLinkAuditFinding {
-  return targetPath === undefined
-    ? { sourcePath, code, fragment, sourceRange }
-    : { sourcePath, code, fragment, sourceRange, targetPath };
+  const base = {
+    id: `${sourcePath}:${sourceRange.from}:${sourceRange.to}`,
+    sourcePath,
+    code,
+    fragment,
+    rawTarget,
+    line,
+    sourceRange,
+    candidates,
+    repairEligibility: candidates.some(
+      (candidate) => candidate.headings.length > 0,
+    )
+      ? ("selection-required" as const)
+      : ("not-repairable" as const),
+  };
+  return targetPath === undefined ? base : { ...base, targetPath };
 }
 
 export function auditHeadingLinks(
@@ -90,7 +116,13 @@ export function auditHeadingLinks(
   const sources = [...input.sources].sort((left, right) =>
     left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
   );
-  const headingsByPath = new Map<string, ReadonlyMap<string, number>>();
+  const headingsByPath = new Map<
+    string,
+    {
+      readonly counts: ReadonlyMap<string, number>;
+      readonly headings: string[];
+    }
+  >();
   for (const source of sources) {
     const path = normalizeTargetPath(source.path);
     if (path === null) continue;
@@ -99,7 +131,10 @@ export function auditHeadingLinks(
       const identity = heading.semanticText.normalize("NFC");
       counts.set(identity, (counts.get(identity) ?? 0) + 1);
     }
-    headingsByPath.set(path, counts);
+    headingsByPath.set(path, {
+      counts,
+      headings: [...counts.keys()].sort(compareCodeUnits),
+    });
   }
 
   const findings: HeadingLinkAuditFinding[] = [];
@@ -114,6 +149,7 @@ export function auditHeadingLinks(
         continue;
       }
       scannedLinks += 1;
+      const line = source.text.slice(0, token.range.from).split("\n").length;
       const normalizedFragment = normalizeHeadingFragment(token.rawFragment);
       if (!normalizedFragment.ok) {
         findings.push(
@@ -122,6 +158,8 @@ export function auditHeadingLinks(
             normalizedFragment.code,
             token.rawFragment,
             token.range,
+            token.raw,
+            line,
           ),
         );
         continue;
@@ -129,7 +167,14 @@ export function auditHeadingLinks(
       const fragment = normalizedFragment.value;
       if (fragment.startsWith("^")) {
         findings.push(
-          finding(source.path, "block-reference", fragment, token.range),
+          finding(
+            source.path,
+            "block-reference",
+            fragment,
+            token.range,
+            token.raw,
+            line,
+          ),
         );
         continue;
       }
@@ -144,6 +189,8 @@ export function auditHeadingLinks(
             "target-resolution-error",
             fragment,
             token.range,
+            token.raw,
+            line,
           ),
         );
         continue;
@@ -155,13 +202,43 @@ export function auditHeadingLinks(
             : resolved.kind === "ambiguous"
               ? "target-ambiguous"
               : "target-external";
-        findings.push(finding(source.path, code, fragment, token.range));
+        const candidates =
+          resolved.kind === "ambiguous"
+            ? resolved.paths.flatMap((candidatePath) => {
+                const normalized = normalizeTargetPath(candidatePath);
+                const indexed = normalized
+                  ? headingsByPath.get(normalized)
+                  : undefined;
+                return normalized && indexed
+                  ? [{ targetPath: normalized, headings: indexed.headings }]
+                  : [];
+              })
+            : [];
+        findings.push(
+          finding(
+            source.path,
+            code,
+            fragment,
+            token.range,
+            token.raw,
+            line,
+            undefined,
+            candidates,
+          ),
+        );
         continue;
       }
       const targetPath = normalizeTargetPath(resolved.path);
       if (targetPath === null) {
         findings.push(
-          finding(source.path, "target-path-invalid", fragment, token.range),
+          finding(
+            source.path,
+            "target-path-invalid",
+            fragment,
+            token.range,
+            token.raw,
+            line,
+          ),
         );
         continue;
       }
@@ -173,12 +250,14 @@ export function auditHeadingLinks(
             "target-source-unavailable",
             fragment,
             token.range,
+            token.raw,
+            line,
             targetPath,
           ),
         );
         continue;
       }
-      const count = targetHeadings.get(fragment) ?? 0;
+      const count = targetHeadings.counts.get(fragment) ?? 0;
       if (count === 0) {
         findings.push(
           finding(
@@ -186,7 +265,10 @@ export function auditHeadingLinks(
             "heading-missing",
             fragment,
             token.range,
+            token.raw,
+            line,
             targetPath,
+            [{ targetPath, headings: targetHeadings.headings }],
           ),
         );
       } else if (count > 1) {
@@ -196,6 +278,8 @@ export function auditHeadingLinks(
             "heading-duplicate",
             fragment,
             token.range,
+            token.raw,
+            line,
             targetPath,
           ),
         );
@@ -213,4 +297,8 @@ export function auditHeadingLinks(
     skippedCount,
     findings,
   };
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }

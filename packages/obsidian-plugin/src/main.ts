@@ -58,9 +58,17 @@ import {
   type ReadingSection,
 } from "./reading-processor.js";
 import type { PersistedOperation } from "./persistence/types.js";
-import { auditHeadingLinks as auditVaultHeadingLinks } from "@heading-keeper/link-core";
+import {
+  auditHeadingLinks as auditVaultHeadingLinks,
+  buildRepairPlan,
+  type HeadingLinkAuditResult,
+  type HeadingLinkAuditSource,
+  type HeadingLinkRepairSelection,
+} from "@heading-keeper/link-core";
 import { HeadingLinkAuditModal } from "./heading-link-audit-modal.js";
 import { AutomaticMaintenance } from "./automatic-maintenance.js";
+import { HeadingLinkRepairModal } from "./heading-link-repair-modal.js";
+import { buildLinkOnlyOperation } from "./persistence/plan-service.js";
 
 export { resolveLocale, translate } from "./i18n.js";
 export type { StoredSettings } from "./settings.js";
@@ -447,7 +455,9 @@ export class HeadingKeeperPlugin extends Plugin {
         "changed",
         (file: TFile, _data: string, cache: CachedMetadata) => {
           const before = this.metadataHeadings.get(file.path) ?? [];
-          const after = (cache.headings ?? []).map((heading) => heading.heading);
+          const after = (cache.headings ?? []).map(
+            (heading) => heading.heading,
+          );
           this.metadataLinkIndex?.update(file, cache);
           this.metadataHeadings.set(file.path, after);
           if (this.settings.mode === "persisted") {
@@ -623,9 +633,7 @@ export class HeadingKeeperPlugin extends Plugin {
       const candidatePaths = this.settings.updateHeadingLinks
         ? (this.metadataLinkIndex?.candidates(active.path, fragments) ?? [])
             .filter((path) => path !== active.path)
-            .sort((left, right) =>
-              left < right ? -1 : left > right ? 1 : 0,
-            )
+            .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))
         : [];
       const sources = [
         { path: active.path, text: targetText },
@@ -760,10 +768,121 @@ export class HeadingKeeperPlugin extends Plugin {
         result,
         this.currentLocale(),
         () => this.openModals.delete(modal),
+        () => this.openHeadingLinkRepair(result, sources),
       );
       this.openModals.add(modal);
       modal.open();
       this.showNotice("notices.auditCompleted");
+    } catch {
+      if (!this.disposed) this.showNotice("notices.operationError");
+    }
+  }
+
+  private openHeadingLinkRepair(
+    result: HeadingLinkAuditResult,
+    sources: readonly HeadingLinkAuditSource[],
+  ): void {
+    let modal: HeadingLinkRepairModal;
+    modal = new HeadingLinkRepairModal(this.app, result, this.currentLocale(), {
+      confirm: (selections) => {
+        void this.applyHeadingLinkRepair(result, sources, selections);
+      },
+      navigate: (sourcePath, line) => {
+        void this.app.workspace.openLinkText(sourcePath, "", false, {
+          eState: { line: Math.max(0, line - 1) },
+        });
+      },
+      exported: (json) => {
+        void globalThis.navigator?.clipboard?.writeText(json);
+      },
+      closed: () => this.openModals.delete(modal),
+    });
+    this.openModals.add(modal);
+    modal.open();
+  }
+
+  private async applyHeadingLinkRepair(
+    result: HeadingLinkAuditResult,
+    _auditSources: readonly HeadingLinkAuditSource[],
+    selections: readonly HeadingLinkRepairSelection[],
+  ): Promise<void> {
+    if (!this.vaultAdapter || selections.length === 0) return;
+    try {
+      const paths = [
+        ...new Set(
+          selections.flatMap((selection) => {
+            const finding = result.findings.find(
+              (candidate) => candidate.id === selection.findingId,
+            );
+            return finding
+              ? [finding.sourcePath, selection.targetPath]
+              : [selection.targetPath];
+          }),
+        ),
+      ].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+      const sources = await Promise.all(
+        paths.map(async (path) => ({
+          path,
+          text: await this.vaultAdapter!.read(path),
+        })),
+      );
+      const repair = buildRepairPlan({
+        sources,
+        findings: result.findings,
+        selections,
+      });
+      if (repair.kind !== "plan") {
+        this.showNotice("notices.applyStale");
+        return;
+      }
+      const byPath = new Map<
+        string,
+        {
+          path: string;
+          beforeText: string;
+          edits: Array<{
+            range: { from: number; to: number };
+            expectedText: string;
+            replacementText: string;
+          }>;
+        }
+      >();
+      for (const edit of repair.edits) {
+        const source = sources.find(
+          (candidate) => candidate.path === edit.sourcePath,
+        );
+        if (!source) throw new Error("repair-source-missing");
+        const entry = byPath.get(edit.sourcePath) ?? {
+          path: edit.sourcePath,
+          beforeText: source.text,
+          edits: [],
+        };
+        entry.edits.push({
+          range: edit.range,
+          expectedText: edit.expectedText,
+          replacementText: edit.replacementText,
+        });
+        byPath.set(edit.sourcePath, entry);
+      }
+      const built = await buildLinkOnlyOperation(
+        { linkSources: [...byPath.values()] },
+        {
+          createId: createOperationId,
+          now: () => new Date().toISOString(),
+          hashText: sha256Text,
+        },
+      );
+      if (built.kind === "no-op") return;
+      const execution = await this.executeAutomaticMaintenance(built.operation);
+      if (execution.kind === "completed") {
+        this.showNotice("notices.applyCompleted");
+      } else if (execution.kind === "stale-plan") {
+        this.showNotice("notices.applyStale");
+      } else if (execution.kind === "recovery-required") {
+        this.showNotice("notices.applyRecovery");
+      } else {
+        this.showNotice("notices.operationError");
+      }
     } catch {
       if (!this.disposed) this.showNotice("notices.operationError");
     }

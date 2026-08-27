@@ -8,6 +8,7 @@ export class HeadingLinkAuditModal extends Modal {
     private readonly result: HeadingLinkAuditResult,
     private readonly locale: Locale,
     private readonly closed: () => void,
+    private readonly openRepair?: () => void,
   ) {
     super(app);
   }
@@ -39,6 +40,17 @@ export class HeadingLinkAuditModal extends Modal {
       list.createEl("li", {
         text: `${item.sourcePath}: ${item.code} (${item.fragment})`,
       });
+    }
+    if (
+      this.openRepair &&
+      this.result.findings.some(
+        (finding) => finding.repairEligibility === "selection-required",
+      )
+    ) {
+      const repair = this.contentEl.createEl("button", {
+        text: this.locale === "zh" ? "选择并修复" : "Select and repair",
+      });
+      repair.addEventListener("click", this.openRepair);
     }
   }
 

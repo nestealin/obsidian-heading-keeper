@@ -141,9 +141,9 @@ describe("buildWorkflowPreview", () => {
     expect(after("## New title", result.operation.files[0])).toBe(
       "## 1. New title",
     );
-    expect(
-      after("[[Target#Old title|alias]]", result.operation.files[1]),
-    ).toBe("[[Target#1. New title|alias]]");
+    expect(after("[[Target#Old title|alias]]", result.operation.files[1])).toBe(
+      "[[Target#1. New title|alias]]",
+    );
   });
 
   it.each([

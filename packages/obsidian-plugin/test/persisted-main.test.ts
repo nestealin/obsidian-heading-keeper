@@ -120,9 +120,9 @@ vi.mock("obsidian", () => {
             headings: [...markdown.matchAll(/^(#{1,6})\s+(.+)$/gm)].map(
               (match) => ({ heading: match[2] ?? "" }),
             ),
-            links: [...markdown.matchAll(/(?<!!)\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)].map(
-              (match) => ({ link: match[1] ?? "" }),
-            ),
+            links: [
+              ...markdown.matchAll(/(?<!!)\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g),
+            ].map((match) => ({ link: match[1] ?? "" })),
           };
         },
         on,
@@ -886,8 +886,7 @@ describe("persisted plugin workflow", () => {
       summaries?: Array<{ id?: string; state?: string }>;
     };
     expect(
-      latest.summaries?.find((summary) => summary.id === "pending-only")
-        ?.state,
+      latest.summaries?.find((summary) => summary.id === "pending-only")?.state,
     ).toBe("completed");
     await plugin.openRecoveryCenter();
     expect(state.notices.at(-1)).toBe(
