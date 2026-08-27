@@ -49,12 +49,12 @@ The workspace keeps Markdown parsing and numbering logic in
 
 ## Readiness
 
-Version `0.2.0` has automated coverage for silent persisted maintenance,
-per-file concurrency protection, restart recovery, bounded plugin data,
-incremental reverse-link indexing, and guided repair. It is not yet approved as
-the sole heading writer in the main Vault; replacement requires the isolated
-isolated test Vault acceptance run documented in this repository. A batch whole-Vault
-numbering migration is not a replacement prerequisite.
+Version `0.2.0` has automated and isolated isolated test Vault coverage for silent persisted
+maintenance, per-file concurrency protection, restart recovery, bounded plugin
+data, incremental reverse-link indexing, and guided repair. It is approved as
+the sole heading writer in isolated test Vault, but has not been installed into the main
+Vault. A batch whole-Vault numbering migration is not a replacement
+prerequisite.
 
 ## Internal-test installation
 

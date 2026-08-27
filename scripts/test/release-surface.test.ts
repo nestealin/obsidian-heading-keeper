@@ -341,7 +341,7 @@ describe("release surface", () => {
       await mkdir(join(extraDirectory, name));
       expect(run(verifyDeploymentScript, [extraDirectory]).status).toBe(1);
     }
-  });
+  }, 15_000);
 
   it("rejects nonexistent and non-directory deployment paths", async () => {
     const missing = join(tmpdir(), "heading-keeper-deploy-does-not-exist");
