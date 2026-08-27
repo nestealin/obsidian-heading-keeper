@@ -58,7 +58,9 @@ data, incremental reverse-link indexing, and guided repair. It is now also the
 sole enabled heading writer in the main desktop test Vault desktop Vault, where virtual
 rendering, silent open/save reconciliation, insertion reorder, direct heading
 rename, Wiki and Markdown link synchronization, plugin reload, and unrelated
-file byte stability passed. A batch whole-Vault numbering migration is not a
+file byte stability passed. Background changes to unopened notes update only
+the metadata index and do not trigger numbering; reconciliation starts when the
+note is actually opened. A batch whole-Vault numbering migration is not a
 replacement prerequisite. Mobile and long-running cross-device behavior remain
 separate observation gates.
 
