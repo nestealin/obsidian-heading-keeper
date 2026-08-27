@@ -20,20 +20,48 @@ import {
 beforeEach(() => (state.modified.length = 0));
 
 describe("Obsidian adapters", () => {
-  it("reads and modifies existing TFiles without creating missing files", async () => {
+  it("atomically compares and updates existing TFiles without creating missing files", async () => {
     const files = new Map([["A.md", new TFile("A.md")]]);
+    const content = new Map([["A.md", "text:A.md"]]);
     const adapter = new ObsidianVaultFileAdapter({
       getAbstractFileByPath: (path) => files.get(path) ?? null,
-      read: async (file) => `text:${file.path}`,
-      modify: async (file, text) => state.modified.push([file.path, text]),
+      read: async (file) => content.get(file.path)!,
+      process: async (file, update) => {
+        const text = update(content.get(file.path)!);
+        content.set(file.path, text);
+        state.modified.push([file.path, text]);
+        return text;
+      },
     });
+    const hashText = async (text: string) => `hash:${text}`;
+    const edits = [
+      {
+        range: { from: 0, to: 4 },
+        expectedText: "text",
+        replacementText: "changed",
+      },
+    ];
 
     await expect(adapter.read("A.md")).resolves.toBe("text:A.md");
-    await adapter.write("A.md", "changed");
-    await expect(adapter.write("Missing.md", "x")).rejects.toThrow(
-      "vault-file-missing",
-    );
-    expect(state.modified).toEqual([["A.md", "changed"]]);
+    await expect(
+      adapter.compareAndUpdate(
+        "A.md",
+        "hash:text:A.md",
+        "hash:changed:A.md",
+        edits,
+        hashText,
+      ),
+    ).resolves.toEqual({ kind: "updated" });
+    await expect(
+      adapter.compareAndUpdate(
+        "Missing.md",
+        "hash:x",
+        "hash:y",
+        edits,
+        hashText,
+      ),
+    ).rejects.toThrow("vault-file-missing");
+    expect(state.modified).toEqual([["A.md", "changed:A.md"]]);
   });
 
   it("resolves same-file fragments directly and other files through metadata", () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { executePersistedOperation } from "../src/persistence/executor.js";
+import { applyCheckedEdits, invertEdits } from "../src/persistence/edits.js";
 import type {
   JournalStore,
   PersistedOperation,
@@ -7,6 +8,29 @@ import type {
 } from "../src/persistence/types.js";
 
 const hashText = async (text: string) => `hash:${text}`;
+
+function fileChange(
+  path: string,
+  beforeText: string,
+  afterText: string,
+  role: "target" | "link-source",
+) {
+  const edits = [
+    {
+      range: { from: 0, to: beforeText.length },
+      expectedText: beforeText,
+      replacementText: afterText,
+    },
+  ];
+  return {
+    path,
+    beforeHash: `hash:${beforeText}`,
+    afterHash: `hash:${afterText}`,
+    edits,
+    inverseEdits: invertEdits(beforeText, edits),
+    role,
+  };
+}
 
 function operation(
   state: PersistedOperation["state"] = "previewed",
@@ -16,30 +40,9 @@ function operation(
     createdAt: "2026-08-25T00:00:00.000Z",
     state,
     files: [
-      {
-        path: "Target.md",
-        beforeHash: "hash:before target",
-        beforeText: "before target",
-        afterHash: "hash:after target",
-        afterText: "after target",
-        role: "target",
-      },
-      {
-        path: "a.md",
-        beforeHash: "hash:before a",
-        beforeText: "before a",
-        afterHash: "hash:after a",
-        afterText: "after a",
-        role: "link-source",
-      },
-      {
-        path: "z.md",
-        beforeHash: "hash:before z",
-        beforeText: "before z",
-        afterHash: "hash:after z",
-        afterText: "after z",
-        role: "link-source",
-      },
+      fileChange("Target.md", "before target", "after target", "target"),
+      fileChange("a.md", "before a", "after a", "link-source"),
+      fileChange("z.md", "before z", "after z", "link-source"),
     ],
     completedPaths: [],
   };
@@ -56,7 +59,9 @@ function harness(initial: Record<string, string>) {
   const content = new Map(Object.entries(initial));
   const events: string[] = [];
   const saves: PersistedOperation[] = [];
-  const vault: VaultFileAdapter = {
+  const vault: VaultFileAdapter & {
+    write(path: string, text: string): Promise<void>;
+  } = {
     read: async (path) => {
       events.push(`read:${path}`);
       const text = content.get(path);
@@ -66,6 +71,23 @@ function harness(initial: Record<string, string>) {
     write: async (path, text) => {
       events.push(`write:${path}`);
       content.set(path, text);
+    },
+    compareAndUpdate: async (
+      path,
+      expectedHash,
+      resultingHash,
+      edits,
+      hash,
+    ) => {
+      const current = content.get(path);
+      if (current === undefined) throw new Error("sensitive read detail");
+      const currentHash = await hash(current);
+      if (currentHash === resultingHash) return { kind: "already-applied" };
+      if (currentHash !== expectedHash) return { kind: "stale" };
+      await vault.write(path, applyCheckedEdits(current, edits));
+      const written = content.get(path)!;
+      if ((await hash(written)) !== resultingHash) throw new Error("mismatch");
+      return { kind: "updated" };
     },
   };
   const journal: JournalStore = {
@@ -140,6 +162,64 @@ describe("executePersistedOperation", () => {
     ).toBe(false);
   });
 
+  it("preserves a concurrent edit that lands after preflight", async () => {
+    const state = harness({
+      "Target.md": "before target",
+      "a.md": "before a",
+      "z.md": "before z",
+    });
+    const baseCompare = state.vault.compareAndUpdate.bind(state.vault);
+    let first = true;
+    state.vault.compareAndUpdate = async (...args) => {
+      if (first) {
+        first = false;
+        state.content.set("Target.md", "external edit after preflight");
+      }
+      return baseCompare(...args);
+    };
+
+    const result = await executePersistedOperation(operation(), {
+      vault: state.vault,
+      journal: state.journal,
+      hashText,
+    });
+
+    expect(result).toMatchObject({
+      kind: "recovery-required",
+      code: "source-stale",
+    });
+    expect(state.content.get("Target.md")).toBe(
+      "external edit after preflight",
+    );
+    expect(state.events.filter((event) => event.startsWith("write:"))).toEqual(
+      [],
+    );
+  });
+
+  it("resumes a preview whose files already match the after hashes without rewriting", async () => {
+    const state = harness({
+      "Target.md": "after target",
+      "a.md": "after a",
+      "z.md": "after z",
+    });
+
+    const result = await executePersistedOperation(operation(), {
+      vault: state.vault,
+      journal: state.journal,
+      hashText,
+    });
+
+    expect(result.kind).toBe("completed");
+    expect(state.events.filter((event) => event.startsWith("write:"))).toEqual(
+      [],
+    );
+    expect(result.operation.completedPaths).toEqual([
+      "Target.md",
+      "a.md",
+      "z.md",
+    ]);
+  });
+
   it("turns thrown preflight reads into a stable zero-write result", async () => {
     const state = harness({ "Target.md": "before target", "z.md": "before z" });
     const result = await executePersistedOperation(operation(), {
@@ -186,7 +266,7 @@ describe("executePersistedOperation", () => {
 
   it.each([
     ["write-error", "write"],
-    ["readback-mismatch", "readback"],
+    ["write-error", "readback"],
   ])("stops after a partial apply on %s", async (expectedCode, failure) => {
     const state = harness({
       "Target.md": "before target",
@@ -293,9 +373,7 @@ describe("executePersistedOperation", () => {
         ...completedOperation(),
         files: [
           {
-            ...completedOperation().files[0]!,
-            afterText: "different",
-            afterHash: "hash:different",
+            ...fileChange("Target.md", "before target", "different", "target"),
           },
           ...completedOperation().files.slice(1),
         ],
@@ -375,19 +453,6 @@ describe("executePersistedOperation", () => {
       () => ({ ...operation(), completedPaths: ["Target.md", "Target.md"] }),
     ],
     [
-      "forged image hash",
-      () => {
-        const value = operation();
-        return {
-          ...value,
-          files: [
-            { ...value.files[0]!, afterHash: "forged" },
-            ...value.files.slice(1),
-          ],
-        };
-      },
-    ],
-    [
       "no-op image",
       () => {
         const value = operation();
@@ -396,7 +461,6 @@ describe("executePersistedOperation", () => {
           files: [
             {
               ...value.files[0]!,
-              afterText: "before target",
               afterHash: "hash:before target",
             },
             ...value.files.slice(1),
@@ -427,8 +491,12 @@ describe("executePersistedOperation", () => {
     },
   );
 
-  it("returns a stable journal-free result when operation hashing throws", async () => {
-    const state = harness({});
+  it("returns a stable result when current-image hashing throws", async () => {
+    const state = harness({
+      "Target.md": "before target",
+      "a.md": "before a",
+      "z.md": "before z",
+    });
     let loads = 0;
     state.journal.load = async () => {
       loads += 1;
@@ -443,11 +511,11 @@ describe("executePersistedOperation", () => {
     });
     expect(result).toMatchObject({
       kind: "recovery-required",
-      code: "operation-hash-error",
+      code: "source-read-error",
     });
     expect(JSON.stringify(result)).not.toContain("private hash detail");
-    expect(loads).toBe(0);
-    expect(state.events).toEqual([]);
+    expect(loads).toBe(1);
+    expect(state.events).toEqual(["read:Target.md", "read:a.md", "read:z.md"]);
   });
 
   it("does not throw when a runtime operation has a malformed shape", async () => {
@@ -468,30 +536,25 @@ describe("executePersistedOperation", () => {
     expect(state.events).toEqual([]);
   });
 
-  it("recomputes every before and after hash before rejecting an image mismatch", async () => {
+  it("rejects an edit whose inverse no longer matches", async () => {
     const state = harness({});
     const original = operation();
     const forged = {
       ...original,
       files: [
-        { ...original.files[0]!, afterHash: "forged" },
+        { ...original.files[0]!, inverseEdits: [] },
         ...original.files.slice(1),
       ],
     };
-    let hashes = 0;
     const result = await executePersistedOperation(forged, {
       vault: state.vault,
       journal: state.journal,
-      hashText: async (text) => {
-        hashes += 1;
-        return `hash:${text}`;
-      },
+      hashText,
     });
     expect(result).toMatchObject({
       kind: "recovery-required",
       code: "operation-invalid",
     });
-    expect(hashes).toBe(6);
     expect(state.events).toEqual([]);
   });
 
@@ -502,9 +565,7 @@ describe("executePersistedOperation", () => {
       ...durable,
       files: [
         {
-          ...durable.files[0]!,
-          afterText: "different",
-          afterHash: "hash:different",
+          ...fileChange("Target.md", "before target", "different", "target"),
         },
         ...durable.files.slice(1),
       ],
@@ -518,7 +579,7 @@ describe("executePersistedOperation", () => {
       kind: "recovery-required",
       code: "operation-conflict",
     });
-    expect(result.operation.files[0]?.afterText).toBe("different");
+    expect(result.operation.files[0]?.afterHash).toBe("hash:different");
     expect(state.events).toEqual([]);
   });
 });

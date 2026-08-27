@@ -3,6 +3,7 @@ import {
   buildAutomaticHeadingLinkSync,
   SavedHeadingLinkSync,
 } from "../src/heading-link-sync.js";
+import { applyCheckedEdits } from "../src/persistence/edits.js";
 
 const operationDependencies = {
   createId: () => "sync-1",
@@ -54,7 +55,16 @@ describe("buildAutomaticHeadingLinkSync", () => {
       "a.md",
       "z.md",
     ]);
-    expect(result.operation.files.map((file) => file.afterText)).toEqual([
+    const beforeByPath = new Map([
+      ["Target.md", "## New title\nSee [[#Old title|self]].\n"],
+      ["a.md", '[label](Target.md#Old%20title "keep")'],
+      ["z.md", "[[Target#Old title|alias]] and plain Old title"],
+    ]);
+    expect(
+      result.operation.files.map((file) =>
+        applyCheckedEdits(beforeByPath.get(file.path)!, file.edits),
+      ),
+    ).toEqual([
       "## New title\nSee [[#New title|self]].\n",
       '[label](Target.md#New%20title "keep")',
       "[[Target#New title|alias]] and plain Old title",
@@ -126,8 +136,12 @@ describe("SavedHeadingLinkSync", () => {
       operationDependencies,
       execute: async (operation) => {
         executed.push(operation.files.map((file) => file.path));
-        for (const file of operation.files)
-          content.set(file.path, file.afterText);
+        for (const file of operation.files) {
+          content.set(
+            file.path,
+            applyCheckedEdits(content.get(file.path)!, file.edits),
+          );
+        }
         return {
           kind: "completed",
           operation: {
@@ -147,7 +161,7 @@ describe("SavedHeadingLinkSync", () => {
     expect(executed).toEqual([["Refs.md"]]);
     expect(content.get("Refs.md")).toBe("[[Target#New]]");
     expect(controller.snapshot("Target.md")).toBe("## New\n");
-    expect(controller.snapshot("Refs.md")).toBe("[[Target#New]]");
+    expect(controller.snapshot("Refs.md")).toBeUndefined();
   });
 
   it("updates snapshots but never scans sources while disabled", async () => {

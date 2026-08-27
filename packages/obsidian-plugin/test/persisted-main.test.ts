@@ -78,6 +78,29 @@ vi.mock("obsidian", () => {
           state.writes.push([target.path, text]);
           state.files.set(target.path, text);
         },
+        process: async (target: TFile, update: (text: string) => string) => {
+          const failureIndex = state.writeFailures.findIndex(
+            (failure) => failure.path === target.path,
+          );
+          const failure =
+            failureIndex < 0
+              ? undefined
+              : state.writeFailures.splice(failureIndex, 1)[0];
+          if (failure) throw failure.error;
+          const index = state.writeGates.findIndex(
+            (gate) => gate.path === target.path,
+          );
+          const gate =
+            index < 0 ? undefined : state.writeGates.splice(index, 1)[0];
+          if (gate) {
+            state.writeGateHits.push(target.path);
+            await gate.promise;
+          }
+          const text = update(state.files.get(target.path) ?? "");
+          state.writes.push([target.path, text]);
+          state.files.set(target.path, text);
+          return text;
+        },
         on,
         read: async (target: TFile) => {
           state.reads += 1;
@@ -218,6 +241,7 @@ vi.mock("../src/editor-extension.js", () => ({
 
 import { HeadingKeeperPlugin } from "../src/main.js";
 import { sha256Text } from "../src/persistence/plan-service.js";
+import { invertEdits } from "../src/persistence/edits.js";
 import type {
   PersistedOperation,
   PersistenceDependencies,
@@ -546,16 +570,7 @@ describe("persisted plugin workflow", () => {
       createdAt: "2026-08-25T00:00:00.000Z",
       state: "recovery-required" as const,
       completedPaths: ["Target.md"],
-      files: [
-        {
-          path: "Target.md",
-          beforeText,
-          beforeHash: await sha256Text(beforeText),
-          afterText,
-          afterHash: await sha256Text(afterText),
-          role: "target" as const,
-        },
-      ],
+      files: [await plannedFile("Target.md", beforeText, afterText)],
     };
     state.activePath = "Target.md";
     state.files.set("Target.md", afterText);
@@ -581,16 +596,7 @@ describe("persisted plugin workflow", () => {
       createdAt: "2026-08-25T00:00:00.000Z",
       state: "recovery-required" as const,
       completedPaths: ["Target.md"],
-      files: [
-        {
-          path: "Target.md",
-          beforeText,
-          beforeHash: await sha256Text(beforeText),
-          afterText,
-          afterHash: await sha256Text(afterText),
-          role: "target" as const,
-        },
-      ],
+      files: [await plannedFile("Target.md", beforeText, afterText)],
     };
     state.activePath = "Target.md";
     state.files.set("Target.md", afterText);
@@ -629,16 +635,7 @@ describe("persisted plugin workflow", () => {
       createdAt: "2026-08-25T00:00:00.000Z",
       state: "recovery-required" as const,
       completedPaths: ["Target.md"],
-      files: [
-        {
-          path: "Target.md",
-          beforeText: targetBefore,
-          beforeHash: await sha256Text(targetBefore),
-          afterText: targetAfter,
-          afterHash: await sha256Text(targetAfter),
-          role: "target" as const,
-        },
-      ],
+      files: [await plannedFile("Target.md", targetBefore, targetAfter)],
     };
     state.activePath = "Target.md";
     state.files.set("Target.md", targetAfter);
@@ -696,7 +693,7 @@ describe("persisted plugin workflow", () => {
     );
     state.activePath = "Target.md";
     state.files.set("Target.md", targetBefore);
-    state.files.set("Other.md", recovery.files[0]!.afterText);
+    state.files.set("Other.md", "## 1. Other");
     state.loadedData = {
       settings: { ...DEFAULT_STORED_SETTINGS, mode: "persisted" },
       journals: { "other-recovery": recovery },
@@ -781,7 +778,7 @@ describe("persisted plugin workflow", () => {
       "## 1. Alpha",
     );
     state.activePath = "Target.md";
-    state.files.set("Target.md", recovery.files[0]!.afterText);
+    state.files.set("Target.md", "## 1. Alpha");
     state.loadedData = {
       settings: { ...DEFAULT_STORED_SETTINGS, mode: "persisted" },
       journals: { "completed-recovery": recovery },
@@ -814,7 +811,7 @@ describe("persisted plugin workflow", () => {
     );
     state.activePath = "Target.md";
     state.files.set("Target.md", "## Alpha");
-    state.files.set("Other.md", recovery.files[0]!.afterText);
+    state.files.set("Other.md", "## 1. Other");
     state.loadedData = {
       settings: { ...DEFAULT_STORED_SETTINGS, mode: "persisted" },
       journals: { "failed-recovery": recovery },
@@ -849,7 +846,7 @@ describe("persisted plugin workflow", () => {
       "## 1. Alpha",
     );
     state.activePath = "Target.md";
-    state.files.set("Target.md", recovery.files[0]!.afterText);
+    state.files.set("Target.md", "## 1. Alpha");
     state.loadedData = {
       settings: { ...DEFAULT_STORED_SETTINGS, mode: "persisted" },
       journals: { "unloaded-recovery": recovery },
@@ -876,16 +873,7 @@ describe("persisted plugin workflow", () => {
       createdAt: "2026-08-25T00:00:00.000Z",
       state: "applying" as const,
       completedPaths: [],
-      files: [
-        {
-          path: "Target.md",
-          beforeText,
-          beforeHash: await sha256Text(beforeText),
-          afterText,
-          afterHash: await sha256Text(afterText),
-          role: "target" as const,
-        },
-      ],
+      files: [await plannedFile("Target.md", beforeText, afterText)],
     };
     state.activePath = "Target.md";
     state.files.set("Target.md", beforeText);
@@ -949,16 +937,39 @@ async function recoveryOperation(
     createdAt: "2026-08-25T00:00:00.000Z",
     state: "recovery-required",
     completedPaths: [path],
-    files: [
-      {
-        path,
-        beforeText,
-        beforeHash: await sha256Text(beforeText),
-        afterText,
-        afterHash: await sha256Text(afterText),
-        role: "target",
-      },
-    ],
+    files: [await plannedFile(path, beforeText, afterText)],
+  };
+}
+
+async function plannedFile(
+  path: string,
+  beforeText: string,
+  afterText: string,
+) {
+  const prefixLength = afterText.length - beforeText.length;
+  const insertion = prefixLength > 0 && afterText.endsWith(beforeText.slice(3));
+  const edits = insertion
+    ? [
+        {
+          range: { from: 3, to: 3 },
+          expectedText: "",
+          replacementText: afterText.slice(3, 3 + prefixLength),
+        },
+      ]
+    : [
+        {
+          range: { from: 0, to: beforeText.length },
+          expectedText: beforeText,
+          replacementText: afterText,
+        },
+      ];
+  return {
+    path,
+    beforeHash: await sha256Text(beforeText),
+    afterHash: await sha256Text(afterText),
+    edits,
+    inverseEdits: invertEdits(beforeText, edits),
+    role: "target" as const,
   };
 }
 

@@ -19,9 +19,9 @@ export interface PlannedTextEdit {
 export interface PlannedFileChange {
   readonly path: string;
   readonly beforeHash: string;
-  readonly beforeText: string;
   readonly afterHash: string;
-  readonly afterText: string;
+  readonly edits: readonly PlannedTextEdit[];
+  readonly inverseEdits: readonly PlannedTextEdit[];
   readonly role: PlannedFileRole;
 }
 
@@ -35,8 +35,19 @@ export interface PersistedOperation {
 
 export interface VaultFileAdapter {
   read(path: string): Promise<string>;
-  write(path: string, text: string): Promise<void>;
+  compareAndUpdate(
+    path: string,
+    expectedHash: string,
+    resultingHash: string,
+    edits: readonly PlannedTextEdit[],
+    hashText: HashText,
+  ): Promise<CompareAndUpdateResult>;
 }
+
+export type CompareAndUpdateResult =
+  | { readonly kind: "updated" }
+  | { readonly kind: "already-applied" }
+  | { readonly kind: "stale" };
 
 export interface JournalStore {
   load(id: string): Promise<PersistedOperation | null>;

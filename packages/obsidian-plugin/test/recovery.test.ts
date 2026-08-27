@@ -3,11 +3,35 @@ import {
   inspectRecovery,
   restoreEligibleFiles,
 } from "../src/persistence/executor.js";
+import { applyCheckedEdits, invertEdits } from "../src/persistence/edits.js";
 import type {
   JournalStore,
   PersistedOperation,
   VaultFileAdapter,
 } from "../src/persistence/types.js";
+
+function fileChange(
+  path: string,
+  beforeText: string,
+  afterText: string,
+  role: "target" | "link-source",
+) {
+  const edits = [
+    {
+      range: { from: 0, to: beforeText.length },
+      expectedText: beforeText,
+      replacementText: afterText,
+    },
+  ];
+  return {
+    path,
+    beforeHash: `hash:${beforeText}`,
+    afterHash: `hash:${afterText}`,
+    edits,
+    inverseEdits: invertEdits(beforeText, edits),
+    role,
+  };
+}
 
 describe("inspectRecovery", () => {
   it("classifies an exact after-image as eligible", async () => {
@@ -15,21 +39,12 @@ describe("inspectRecovery", () => {
       id: "op-1",
       createdAt: "2026-08-25T00:00:00.000Z",
       state: "recovery-required",
-      files: [
-        {
-          path: "Target.md",
-          beforeHash: "hash:before",
-          beforeText: "before",
-          afterHash: "hash:after",
-          afterText: "after",
-          role: "target",
-        },
-      ],
+      files: [fileChange("Target.md", "before", "after", "target")],
       completedPaths: [],
     };
     const vault: VaultFileAdapter = {
       read: async () => "after",
-      write: async () => undefined,
+      compareAndUpdate: async () => ({ kind: "updated" }),
     };
     const journal: JournalStore = {
       load: async () => operation,
@@ -66,38 +81,15 @@ function recoveryOperation(
     createdAt: "2026-08-25T00:00:00.000Z",
     state,
     files: [
-      {
-        path: "Target.md",
-        beforeHash: "hash:before target",
-        beforeText: "before target",
-        afterHash: "hash:after target",
-        afterText: "after target",
-        role: "target",
-      },
-      {
-        path: "a.md",
-        beforeHash: "hash:before a",
-        beforeText: "before a",
-        afterHash: "hash:after a",
-        afterText: "after a",
-        role: "link-source",
-      },
-      {
-        path: "z.md",
-        beforeHash: "hash:before z",
-        beforeText: "before z",
-        afterHash: "hash:after z",
-        afterText: "after z",
-        role: "link-source",
-      },
-      {
-        path: "zz-pending.md",
-        beforeHash: "hash:before pending",
-        beforeText: "before pending",
-        afterHash: "hash:after pending",
-        afterText: "after pending",
-        role: "link-source",
-      },
+      fileChange("Target.md", "before target", "after target", "target"),
+      fileChange("a.md", "before a", "after a", "link-source"),
+      fileChange("z.md", "before z", "after z", "link-source"),
+      fileChange(
+        "zz-pending.md",
+        "before pending",
+        "after pending",
+        "link-source",
+      ),
     ],
     completedPaths: ["a.md"],
   };
@@ -107,7 +99,9 @@ function recoveryAdapters(initial: Record<string, string>) {
   const content = new Map(Object.entries(initial));
   const writes: string[] = [];
   const saves: PersistedOperation[] = [];
-  const vault: VaultFileAdapter = {
+  const vault: VaultFileAdapter & {
+    write(path: string, text: string): Promise<void>;
+  } = {
     read: async (path) => {
       const value = content.get(path);
       if (value === undefined) throw new Error("private read text");
@@ -116,6 +110,24 @@ function recoveryAdapters(initial: Record<string, string>) {
     write: async (path, text) => {
       writes.push(path);
       content.set(path, text);
+    },
+    compareAndUpdate: async (
+      path,
+      expectedHash,
+      resultingHash,
+      edits,
+      hash,
+    ) => {
+      const current = await vault.read(path);
+      const currentHash = await hash(current);
+      if (currentHash === resultingHash) return { kind: "already-applied" };
+      if (currentHash !== expectedHash) return { kind: "stale" };
+      const updated = applyCheckedEdits(current, edits);
+      if ((await hash(updated)) !== resultingHash) {
+        throw new Error("readback mismatch");
+      }
+      await vault.write(path, updated);
+      return { kind: "updated" };
     },
   };
   const journal: JournalStore = {
@@ -357,7 +369,7 @@ describe("conservative recovery", () => {
       };
       const checkedHash = async (text: string) => {
         hashes += 1;
-        if (failure === "hash" && hashes === 4)
+        if (failure === "hash" && hashes === 3)
           throw new Error("private prewrite hash");
         return hashText(text);
       };
@@ -395,7 +407,7 @@ describe("conservative recovery", () => {
     expect(state.writes).toEqual([]);
     expect(result).toMatchObject({
       kind: "recovery-required",
-      code: "recovery-conflict",
+      code: "restore-write-error",
     });
   });
 

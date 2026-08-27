@@ -1,5 +1,10 @@
 import { snapshotOperation } from "./journal.js";
-import type { HashText, OperationState, PersistedOperation } from "./types.js";
+import type {
+  HashText,
+  OperationState,
+  PersistedOperation,
+  PlannedTextEdit,
+} from "./types.js";
 
 export type OperationValidationMode = "execute-caller" | "durable" | "restore";
 
@@ -39,6 +44,55 @@ function validState(
   return true;
 }
 
+function validEdit(edit: PlannedTextEdit): boolean {
+  return (
+    Number.isSafeInteger(edit.range.from) &&
+    Number.isSafeInteger(edit.range.to) &&
+    edit.range.from >= 0 &&
+    edit.range.to >= edit.range.from &&
+    edit.expectedText.length === edit.range.to - edit.range.from &&
+    edit.expectedText !== edit.replacementText
+  );
+}
+
+function validEditPair(
+  edits: readonly PlannedTextEdit[],
+  inverseEdits: readonly PlannedTextEdit[],
+): boolean {
+  if (edits.length === 0 || edits.length !== inverseEdits.length) return false;
+  const ordered = [...edits].sort(
+    (left, right) =>
+      left.range.from - right.range.from || left.range.to - right.range.to,
+  );
+  let delta = 0;
+  let previousEnd = -1;
+  for (let index = 0; index < ordered.length; index += 1) {
+    const edit = ordered[index]!;
+    const inverse = inverseEdits[index];
+    if (!inverse || !validEdit(edit) || !validEdit(inverse)) return false;
+    if (edit.range.from < previousEnd) return false;
+    if (
+      edit.range.from === edit.range.to &&
+      edit.range.from === previousEnd &&
+      index > 0
+    ) {
+      return false;
+    }
+    const inverseFrom = edit.range.from + delta;
+    if (
+      inverse.range.from !== inverseFrom ||
+      inverse.range.to !== inverseFrom + edit.replacementText.length ||
+      inverse.expectedText !== edit.replacementText ||
+      inverse.replacementText !== edit.expectedText
+    ) {
+      return false;
+    }
+    previousEnd = edit.range.to;
+    delta += edit.replacementText.length - edit.expectedText.length;
+  }
+  return true;
+}
+
 function structurallyValid(
   operation: PersistedOperation,
   mode: OperationValidationMode,
@@ -60,7 +114,10 @@ function structurallyValid(
     if (
       file.path.trim().length === 0 ||
       paths.has(file.path) ||
-      file.beforeText === file.afterText ||
+      file.beforeHash.length === 0 ||
+      file.afterHash.length === 0 ||
+      file.beforeHash === file.afterHash ||
+      !validEditPair(file.edits, file.inverseEdits) ||
       (file.role !== "target" && file.role !== "link-source")
     ) {
       return false;
@@ -91,7 +148,7 @@ function structurallyValid(
 
 export async function validatePersistedOperation(
   operation: PersistedOperation,
-  hashText: HashText,
+  _hashText: HashText,
   mode: OperationValidationMode,
 ): Promise<OperationValidationResult> {
   let snapshot: PersistedOperation;
@@ -104,24 +161,6 @@ export async function validatePersistedOperation(
     return { ok: false, code: "operation-invalid" };
   }
 
-  try {
-    const hashes: string[] = [];
-    for (const file of snapshot.files) {
-      hashes.push(await hashText(file.beforeText));
-      hashes.push(await hashText(file.afterText));
-    }
-    for (let index = 0; index < snapshot.files.length; index += 1) {
-      const file = snapshot.files[index]!;
-      if (
-        hashes[index * 2] !== file.beforeHash ||
-        hashes[index * 2 + 1] !== file.afterHash
-      ) {
-        return { ok: false, code: "operation-invalid" };
-      }
-    }
-  } catch {
-    return { ok: false, code: "operation-hash-error" };
-  }
   return { ok: true, operation: snapshot };
 }
 
@@ -142,10 +181,10 @@ export function sameOperationIdentity(
       other !== undefined &&
       file.path === other.path &&
       file.beforeHash === other.beforeHash &&
-      file.beforeText === other.beforeText &&
       file.afterHash === other.afterHash &&
-      file.afterText === other.afterText &&
-      file.role === other.role
+      file.role === other.role &&
+      JSON.stringify(file.edits) === JSON.stringify(other.edits) &&
+      JSON.stringify(file.inverseEdits) === JSON.stringify(other.inverseEdits)
     );
   });
 }

@@ -45,6 +45,12 @@ vi.mock("obsidian", () => {
           state.content.set(file.path, text);
           state.writes.push(file.path);
         },
+        process: async (file: TFile, update: (text: string) => string) => {
+          const text = update(state.content.get(file.path) ?? "");
+          state.content.set(file.path, text);
+          state.writes.push(file.path);
+          return text;
+        },
         read: async (file: TFile) => state.content.get(file.path) ?? "",
         on: (name: string, callback: (...args: unknown[]) => unknown) => {
           state.events.set(name, callback);

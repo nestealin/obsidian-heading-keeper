@@ -3,12 +3,22 @@ import { DEFAULT_STORED_SETTINGS } from "../src/settings.js";
 import { sha256Text } from "../src/persistence/plan-service.js";
 import type { PersistedOperation } from "../src/persistence/types.js";
 import { PluginDataStore } from "../src/plugin-data.js";
+import { invertEdits } from "../src/persistence/edits.js";
 
 async function operation(
   id = "op-1",
   state: PersistedOperation["state"] = "previewed",
   createdAt = "2026-08-25T00:00:00.000Z",
 ): Promise<PersistedOperation> {
+  const beforeText = "## A";
+  const afterText = "## 1. A";
+  const edits = [
+    {
+      range: { from: 3, to: 3 },
+      expectedText: "",
+      replacementText: "1. ",
+    },
+  ];
   return {
     id,
     createdAt,
@@ -17,10 +27,10 @@ async function operation(
     files: [
       {
         path: "Target.md",
-        beforeText: "## A",
-        beforeHash: await sha256Text("## A"),
-        afterText: "## 1. A",
-        afterHash: await sha256Text("## 1. A"),
+        beforeHash: await sha256Text(beforeText),
+        afterHash: await sha256Text(afterText),
+        edits,
+        inverseEdits: invertEdits(beforeText, edits),
         role: "target",
       },
     ],

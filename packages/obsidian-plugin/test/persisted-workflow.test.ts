@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_STORED_SETTINGS } from "../src/settings.js";
 import { sha256Text } from "../src/persistence/plan-service.js";
 import { buildWorkflowPreview } from "../src/persisted-workflow.js";
+import { applyCheckedEdits } from "../src/persistence/edits.js";
+import type { PlannedFileChange } from "../src/persistence/types.js";
 
 const settings = { ...DEFAULT_STORED_SETTINGS, mode: "persisted" as const };
 const deps = {
@@ -9,6 +11,11 @@ const deps = {
   now: () => "2026-08-25T00:00:00.000Z",
   hashText: sha256Text,
 };
+
+function after(beforeText: string, file: PlannedFileChange | undefined) {
+  if (!file) throw new Error("missing planned file");
+  return applyCheckedEdits(beforeText, file.edits);
+}
 
 describe("buildWorkflowPreview", () => {
   it("builds global target and link-source edits for wiki and markdown links", async () => {
@@ -38,12 +45,15 @@ describe("buildWorkflowPreview", () => {
       { path: "Target.md", role: "target" },
       { path: "Links.md", role: "link-source" },
     ]);
-    expect(result.operation.files[0]?.afterText).toBe(
-      "# Outside\n## 1. Alpha\n### 1.1. Beta",
-    );
-    expect(result.operation.files[1]?.afterText).toBe(
-      '[[Target#1. Alpha|keep]] and [B](Target.md#1.1.%20Beta "title")',
-    );
+    expect(
+      after("# Outside\n## Alpha\n### Beta", result.operation.files[0]),
+    ).toBe("# Outside\n## 1. Alpha\n### 1.1. Beta");
+    expect(
+      after(
+        '[[Target#Alpha|keep]] and [B](Target.md#Beta "title")',
+        result.operation.files[1],
+      ),
+    ).toBe('[[Target#1. Alpha|keep]] and [B](Target.md#1.1.%20Beta "title")');
     expect(result.groups.targetEdits).toHaveLength(2);
     expect(result.groups.linkSources).toEqual([
       {
@@ -86,7 +96,7 @@ describe("buildWorkflowPreview", () => {
     expect(result.kind).toBe("preview");
     if (result.kind !== "preview") return;
     expect(result.operation.files).toHaveLength(1);
-    expect(result.operation.files[0]?.afterText).toBe(
+    expect(after("## Alpha\n[[#Alpha]]", result.operation.files[0])).toBe(
       "## 1. Alpha\n[[#1. Alpha]]",
     );
     expect(result.groups.targetEdits).toHaveLength(1);
@@ -132,7 +142,7 @@ describe("buildWorkflowPreview", () => {
       expect(added.kind).toBe("preview");
       if (added.kind !== "preview") return;
       expect(added.operation.files).toHaveLength(1);
-      expect(added.operation.files[0]?.afterText).toBe(numberedText);
+      expect(after(beforeText, added.operation.files[0])).toBe(numberedText);
       expect(added.groups.targetEdits).toHaveLength(2);
       expect(added.groups.linkSources).toHaveLength(1);
 
@@ -150,7 +160,7 @@ describe("buildWorkflowPreview", () => {
       expect(removed.kind).toBe("preview");
       if (removed.kind !== "preview") return;
       expect(removed.operation.files).toHaveLength(1);
-      expect(removed.operation.files[0]?.afterText).toBe(beforeText);
+      expect(after(numberedText, removed.operation.files[0])).toBe(beforeText);
       expect(removed.groups.targetEdits).toHaveLength(2);
       expect(removed.groups.linkSources).toHaveLength(1);
     },
@@ -358,10 +368,15 @@ describe("buildWorkflowPreview", () => {
 
     expect(result.kind).toBe("preview");
     if (result.kind !== "preview") return;
-    expect(result.operation.files[0]?.afterText).toBe(
-      "## Alpha  ##\r\n### Beta\r\n## 2026 plan",
+    expect(
+      after(
+        "## 1. Alpha  ##\r\n### 1.1. Beta\r\n## 2026 plan",
+        result.operation.files[0],
+      ),
+    ).toBe("## Alpha  ##\r\n### Beta\r\n## 2026 plan");
+    expect(after("[[Target#1. Alpha|alias]]", result.operation.files[1])).toBe(
+      "[[Target#Alpha|alias]]",
     );
-    expect(result.operation.files[1]?.afterText).toBe("[[Target#Alpha|alias]]");
     expect(result.groups.preserved).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ code: "semantic-prefix" }),
@@ -403,7 +418,7 @@ describe("buildWorkflowPreview", () => {
       },
     ]);
     expect(result.operation.files).toHaveLength(1);
-    expect(result.operation.files[0]?.afterText).toBe(
+    expect(after(beforeText, result.operation.files[0])).toBe(
       [
         "# Outside",
         "## Alpha",

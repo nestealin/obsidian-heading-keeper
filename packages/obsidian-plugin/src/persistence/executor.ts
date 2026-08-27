@@ -32,16 +32,11 @@ function invalidExecutionResult(
   };
 }
 
-async function exactImage(
-  text: string,
-  expectedText: string,
-  expectedHash: string,
+async function imageHash(
+  path: string,
   dependencies: PersistenceDependencies,
-): Promise<boolean> {
-  return (
-    text === expectedText &&
-    (await dependencies.hashText(text)) === expectedHash
-  );
+): Promise<string> {
+  return dependencies.hashText(await dependencies.vault.read(path));
 }
 
 async function recoveryResult(
@@ -122,19 +117,13 @@ export async function executePersistedOperation(
   }
 
   let preflightFailure: ExecutionResult | null = null;
+  const alreadyApplied: string[] = [];
   for (const file of executable.files) {
-    let current: string;
     try {
-      current = await dependencies.vault.read(file.path);
-      if (
-        !(await exactImage(
-          current,
-          file.beforeText,
-          file.beforeHash,
-          dependencies,
-        )) &&
-        preflightFailure === null
-      ) {
+      const currentHash = await imageHash(file.path, dependencies);
+      if (currentHash === file.afterHash) {
+        alreadyApplied.push(file.path);
+      } else if (currentHash !== file.beforeHash && preflightFailure === null) {
         preflightFailure = {
           kind: "stale-plan",
           code: "source-stale",
@@ -153,7 +142,11 @@ export async function executePersistedOperation(
   }
   if (preflightFailure) return preflightFailure;
 
-  let currentOperation = snapshotOperation(executable, "applying", []);
+  let currentOperation = snapshotOperation(
+    executable,
+    "applying",
+    alreadyApplied,
+  );
   try {
     await dependencies.journal.save(currentOperation);
   } catch {
@@ -164,33 +157,23 @@ export async function executePersistedOperation(
     };
   }
 
-  const completedPaths: string[] = [];
+  const completedPaths = [...alreadyApplied];
   for (const file of currentOperation.files) {
+    if (completedPaths.includes(file.path)) continue;
+    let updateResult;
     try {
-      await dependencies.vault.write(file.path, file.afterText);
+      updateResult = await dependencies.vault.compareAndUpdate(
+        file.path,
+        file.beforeHash,
+        file.afterHash,
+        file.edits,
+        dependencies.hashText,
+      );
     } catch {
       return recoveryResult(currentOperation, "write-error", dependencies);
     }
-
-    let readBack: string;
-    try {
-      readBack = await dependencies.vault.read(file.path);
-      if (
-        !(await exactImage(
-          readBack,
-          file.afterText,
-          file.afterHash,
-          dependencies,
-        ))
-      ) {
-        return recoveryResult(
-          currentOperation,
-          "readback-mismatch",
-          dependencies,
-        );
-      }
-    } catch {
-      return recoveryResult(currentOperation, "readback-error", dependencies);
+    if (updateResult.kind === "stale") {
+      return recoveryResult(currentOperation, "source-stale", dependencies);
     }
 
     completedPaths.push(file.path);
@@ -232,15 +215,11 @@ export async function inspectRecovery(
   const completed = new Set(operation.completedPaths);
   for (const file of operation.files) {
     try {
-      const current = await dependencies.vault.read(file.path);
-      const currentHash = await dependencies.hashText(current);
+      const currentHash = await imageHash(file.path, dependencies);
       let status: RecoveryInspection["files"][number]["status"];
-      if (current === file.afterText && currentHash === file.afterHash) {
+      if (currentHash === file.afterHash) {
         status = "eligible";
-      } else if (
-        current === file.beforeText &&
-        currentHash === file.beforeHash
-      ) {
+      } else if (currentHash === file.beforeHash) {
         status = completed.has(file.path) ? "restored" : "pending";
       } else {
         status = "changed";
@@ -326,25 +305,15 @@ export async function restoreEligibleFiles(
   for (let index = currentOperation.files.length - 1; index >= 0; index -= 1) {
     const file = currentOperation.files[index]!;
     if (!eligible.has(file.path)) continue;
+    let updateResult;
     try {
-      const current = await dependencies.vault.read(file.path);
-      if (
-        !(await exactImage(
-          current,
-          file.afterText,
-          file.afterHash,
-          dependencies,
-        ))
-      ) {
-        sawPrewriteConflict = true;
-        continue;
-      }
-    } catch {
-      sawPrewriteConflict = true;
-      continue;
-    }
-    try {
-      await dependencies.vault.write(file.path, file.beforeText);
+      updateResult = await dependencies.vault.compareAndUpdate(
+        file.path,
+        file.afterHash,
+        file.beforeHash,
+        file.inverseEdits,
+        dependencies.hashText,
+      );
     } catch {
       return restoreFailure(
         currentOperation,
@@ -352,28 +321,9 @@ export async function restoreEligibleFiles(
         dependencies,
       );
     }
-    try {
-      const readBack = await dependencies.vault.read(file.path);
-      if (
-        !(await exactImage(
-          readBack,
-          file.beforeText,
-          file.beforeHash,
-          dependencies,
-        ))
-      ) {
-        return restoreFailure(
-          currentOperation,
-          "restore-readback-mismatch",
-          dependencies,
-        );
-      }
-    } catch {
-      return restoreFailure(
-        currentOperation,
-        "restore-readback-error",
-        dependencies,
-      );
+    if (updateResult.kind === "stale") {
+      sawPrewriteConflict = true;
+      continue;
     }
     try {
       await dependencies.journal.save(currentOperation);

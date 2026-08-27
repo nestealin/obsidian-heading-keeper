@@ -55,6 +55,7 @@ import {
   type PreviewReasonCode,
 } from "../src/persisted-workflow.js";
 import { sha256Text } from "../src/persistence/plan-service.js";
+import { applyCheckedEdits } from "../src/persistence/edits.js";
 import { DEFAULT_STORED_SETTINGS } from "../src/settings.js";
 
 describe("persisted modals", () => {
@@ -141,9 +142,12 @@ describe("persisted modals", () => {
       );
       expect(result.kind).toBe("preview");
       if (result.kind !== "preview") return;
-      expect(result.operation.files[0]?.afterText).toBe(
-        "## 1. Alpha\n[[#1. Alpha]]",
-      );
+      expect(
+        applyCheckedEdits(
+          "## Alpha\n[[#Alpha]]",
+          result.operation.files[0]!.edits,
+        ),
+      ).toBe("## 1. Alpha\n[[#1. Alpha]]");
 
       const modal = new PersistedPreviewModal(
         {} as never,

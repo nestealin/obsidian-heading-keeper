@@ -8,6 +8,12 @@ import type {
   PlannedTextEdit,
 } from "./types.js";
 import { snapshotOperation } from "./journal.js";
+import {
+  applyCheckedEdits,
+  CheckedEditError,
+  copyEdit,
+  invertEdits,
+} from "./edits.js";
 
 export type PersistedPlanErrorCode =
   | "invalid-target-plan"
@@ -45,14 +51,6 @@ export interface BuildLinkOnlyOperationInput {
   readonly linkSources: readonly LinkSourcePlanInput[];
 }
 
-function copiedEdit(edit: PlannedTextEdit): PlannedTextEdit {
-  return {
-    range: { from: edit.range.from, to: edit.range.to },
-    expectedText: edit.expectedText,
-    replacementText: edit.replacementText,
-  };
-}
-
 function prefixInsertionEdit(edit: PlannedTextEdit): PlannedTextEdit {
   if (!edit.replacementText.endsWith(edit.expectedText)) {
     throw new PersistedPlanError("invalid-target-plan");
@@ -71,48 +69,14 @@ function applyVerifiedEdits(
   beforeText: string,
   edits: readonly PlannedTextEdit[],
 ): string {
-  const ordered = edits
-    .map(copiedEdit)
-    .sort(
-      (left, right) =>
-        left.range.from - right.range.from || left.range.to - right.range.to,
-    );
-  for (let index = 0; index < ordered.length; index += 1) {
-    const edit = ordered[index]!;
-    const { from, to } = edit.range;
-    if (
-      !Number.isSafeInteger(from) ||
-      !Number.isSafeInteger(to) ||
-      from < 0 ||
-      to < from ||
-      to > beforeText.length
-    ) {
-      throw new PersistedPlanError("range-invalid");
+  try {
+    return applyCheckedEdits(beforeText, edits);
+  } catch (error) {
+    if (error instanceof CheckedEditError) {
+      throw new PersistedPlanError(error.code);
     }
-    if (beforeText.slice(from, to) !== edit.expectedText) {
-      throw new PersistedPlanError("expected-text-mismatch");
-    }
-    const previous = ordered[index - 1];
-    if (
-      previous &&
-      (from < previous.range.to ||
-        (from === to &&
-          previous.range.from === previous.range.to &&
-          from === previous.range.from))
-    ) {
-      throw new PersistedPlanError("edit-overlap");
-    }
+    throw error;
   }
-
-  let result = beforeText;
-  for (let index = ordered.length - 1; index >= 0; index -= 1) {
-    const edit = ordered[index]!;
-    result =
-      result.slice(0, edit.range.from) +
-      edit.replacementText +
-      result.slice(edit.range.to);
-  }
-  return result;
 }
 
 export async function buildPersistedOperation(
@@ -131,7 +95,7 @@ export async function buildPersistedOperation(
     throw new PersistedPlanError("invalid-target-plan");
   }
   const targetNumberingEdits = input.target.numberingPlan.entries.flatMap(
-    (entry) => (entry.edit ? [copiedEdit(entry.edit)] : []),
+    (entry) => (entry.edit ? [copyEdit(entry.edit)] : []),
   );
   if (
     input.target.numberingMaterialization !== "insert" &&
@@ -150,7 +114,7 @@ export async function buildPersistedOperation(
     role: "target",
     edits: [
       ...targetNumberingInsertions,
-      ...input.target.linkEdits.map(copiedEdit),
+      ...input.target.linkEdits.map(copyEdit),
     ],
   });
 
@@ -162,13 +126,13 @@ export async function buildPersistedOperation(
       if (existing.beforeText !== beforeText) {
         throw new PersistedPlanError("source-text-conflict");
       }
-      existing.edits.push(...source.edits.map(copiedEdit));
+      existing.edits.push(...source.edits.map(copyEdit));
     } else {
       files.set(path, {
         path,
         beforeText,
         role: "link-source",
-        edits: source.edits.map(copiedEdit),
+        edits: source.edits.map(copyEdit),
       });
     }
   }
@@ -199,9 +163,9 @@ export async function buildPersistedOperation(
     materialized.map(async (file) => ({
       path: file.path,
       beforeHash: await dependencies.hashText(file.beforeText),
-      beforeText: file.beforeText,
       afterHash: await dependencies.hashText(file.afterText),
-      afterText: file.afterText,
+      edits: file.edits.map(copyEdit),
+      inverseEdits: invertEdits(file.beforeText, file.edits),
       role: file.role,
     })),
   );
@@ -230,13 +194,13 @@ export async function buildLinkOnlyOperation(
       if (existing.beforeText !== beforeText) {
         throw new PersistedPlanError("source-text-conflict");
       }
-      existing.edits.push(...source.edits.map(copiedEdit));
+      existing.edits.push(...source.edits.map(copyEdit));
     } else {
       files.set(source.path, {
         path: source.path,
         beforeText,
         role: "link-source",
-        edits: source.edits.map(copiedEdit),
+        edits: source.edits.map(copyEdit),
       });
     }
   }
@@ -256,9 +220,9 @@ export async function buildLinkOnlyOperation(
     materialized.map(async (file) => ({
       path: file.path,
       beforeHash: await dependencies.hashText(file.beforeText),
-      beforeText: file.beforeText,
       afterHash: await dependencies.hashText(file.afterText),
-      afterText: file.afterText,
+      edits: file.edits.map(copyEdit),
+      inverseEdits: invertEdits(file.beforeText, file.edits),
       role: file.role,
     })),
   );

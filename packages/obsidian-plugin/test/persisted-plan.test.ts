@@ -10,6 +10,8 @@ import {
   PersistedPlanError,
   sha256Text,
 } from "../src/persistence/plan-service.js";
+import { applyCheckedEdits } from "../src/persistence/edits.js";
+import type { PlannedFileChange } from "../src/persistence/types.js";
 
 const dependencies = {
   createId: () => "op-1",
@@ -30,7 +32,43 @@ function targetInput(beforeText: string) {
   };
 }
 
+function after(beforeText: string, file: PlannedFileChange | undefined) {
+  if (!file) throw new Error("missing planned file");
+  return applyCheckedEdits(beforeText, file.edits);
+}
+
 describe("buildPersistedOperation", () => {
+  it("persists only hashes and minimal edits, never complete note bodies", async () => {
+    const beforeText = "## Private heading\nprivate body marker\n";
+    const result = await buildPersistedOperation(
+      { target: targetInput(beforeText), linkSources: [] },
+      { ...dependencies, hashText: sha256Text },
+    );
+
+    expect(result.kind).toBe("operation");
+    if (result.kind !== "operation") return;
+    const serialized = JSON.stringify(result.operation);
+    expect(serialized).not.toContain('"beforeText"');
+    expect(serialized).not.toContain('"afterText"');
+    expect(serialized).not.toContain("private body marker");
+    expect(result.operation.files[0]).toMatchObject({
+      edits: [
+        {
+          range: { from: 3, to: 3 },
+          expectedText: "",
+          replacementText: "1. ",
+        },
+      ],
+      inverseEdits: [
+        {
+          range: { from: 3, to: 6 },
+          expectedText: "1. ",
+          replacementText: "",
+        },
+      ],
+    });
+  });
+
   it("returns an explicit no-op without allocating identity or hashes", async () => {
     let dependencyCalls = 0;
     const beforeText = "## 1. Existing\n";
@@ -124,7 +162,7 @@ describe("buildPersistedOperation", () => {
 
     expect(result.kind).toBe("operation");
     if (result.kind !== "operation") return;
-    expect(result.operation).toEqual({
+    expect(result.operation).toMatchObject({
       id: "op-1",
       createdAt: "2026-08-25T00:00:00.000Z",
       state: "previewed",
@@ -133,29 +171,32 @@ describe("buildPersistedOperation", () => {
         {
           path: "Target.md",
           role: "target",
-          beforeText: beforeTarget,
           beforeHash: `hash:${beforeTarget}`,
-          afterText: "## 1. Title\r\nSee [[#1. Title]].\r\n",
           afterHash: "hash:## 1. Title\r\nSee [[#1. Title]].\r\n",
         },
         {
           path: "a.md",
           role: "link-source",
-          beforeText: "[[Target#Title]]",
           beforeHash: "hash:[[Target#Title]]",
-          afterText: "[[Target#1. Title]]",
           afterHash: "hash:[[Target#1. Title]]",
         },
         {
           path: "z.md",
           role: "link-source",
-          beforeText: refsBefore,
           beforeHash: `hash:${refsBefore}`,
-          afterText: "[[Target#1. Title]] and [[Target#1. Title]]",
           afterHash: "hash:[[Target#1. Title]] and [[Target#1. Title]]",
         },
       ],
     });
+    expect(after(beforeTarget, result.operation.files[0])).toBe(
+      "## 1. Title\r\nSee [[#1. Title]].\r\n",
+    );
+    expect(after("[[Target#Title]]", result.operation.files[1])).toBe(
+      "[[Target#1. Title]]",
+    );
+    expect(after(refsBefore, result.operation.files[2])).toBe(
+      "[[Target#1. Title]] and [[Target#1. Title]]",
+    );
     expect(Object.isFrozen(result.operation)).toBe(true);
     expect(Object.isFrozen(result.operation.files)).toBe(true);
     expect(Object.isFrozen(result.operation.files[0])).toBe(true);
@@ -256,7 +297,9 @@ describe("buildPersistedOperation", () => {
 
     expect(result.kind).toBe("operation");
     if (result.kind !== "operation") return;
-    expect(result.operation.files[0]?.afterText).toBe("## Alpha\n## Beta\n");
+    expect(after(beforeText, result.operation.files[0])).toBe(
+      "## Alpha\n## Beta\n",
+    );
   });
 
   it("rejects forged target plans", async () => {
@@ -298,7 +341,8 @@ describe("buildPersistedOperation", () => {
     release();
     const result = await resultPromise;
     expect(
-      result.kind === "operation" && result.operation.files[1]?.afterText,
+      result.kind === "operation" &&
+        after("[[Target#Title]]", result.operation.files[1]),
     ).toBe("[[Target#1. Title]]");
   });
 
@@ -334,14 +378,15 @@ describe("buildLinkOnlyOperation", () => {
       expect.objectContaining({
         path: "a.md",
         role: "link-source",
-        afterText: "[[Target#New]]",
       }),
       expect.objectContaining({
         path: "z.md",
         role: "link-source",
-        afterText: "[[Target#New]]",
       }),
     ]);
+    expect(
+      result.operation.files.map((file) => after("[[Target#Old]]", file)),
+    ).toEqual(["[[Target#New]]", "[[Target#New]]"]);
     expect(result.operation.files.some((file) => file.role === "target")).toBe(
       false,
     );

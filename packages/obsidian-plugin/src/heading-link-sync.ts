@@ -169,7 +169,9 @@ export class SavedHeadingLinkSync {
   acceptCompleted(operation: PersistedOperation): void {
     if (operation.state !== "completed") return;
     for (const file of operation.files) {
-      this.snapshots.set(file.path, file.afterText);
+      // The durable journal intentionally contains no full note bodies. Drop
+      // affected snapshots so the next modify event establishes a fresh base.
+      this.snapshots.delete(file.path);
     }
   }
 
