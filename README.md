@@ -1,42 +1,104 @@
 # Heading Keeper
 
-An offline Obsidian plugin that keeps hierarchical heading numbers and
-heading-fragment links coherent.
+Keep hierarchical heading numbers and heading-fragment links coherent in
+Obsidian.
 
-- Virtual numbering is enabled by default and never writes Markdown.
-- Persisted numbering is a one-time opt-in. After that, opened and edited notes
-  are maintained silently after Obsidian saves them.
-- Uniquely proven heading renames update only reverse-indexed link sources.
-  Numbering and link changes share one durable, retryable operation.
-- Historical broken links remain read-only until the user chooses an exact
-  target and confirms the complete repair selection.
+Heading Keeper is a public community plugin designed to work locally and
+offline.
 
-Heading Keeper is developed as a general-purpose public community plugin.
-Version `0.2.0` is in closed beta and starts in virtual mode. Closed beta limits
-who receives the current build while it stabilizes; it does not define a
-private-only product, storage format, or feature scope. The source repository
-and Community directory listing will be opened after the beta gate passes.
-Local Vault habits are acceptance inputs, not product-wide feature rules.
+## Features
 
-## Runtime behavior
+- Show configurable hierarchical numbers in the editor and reading view without
+  changing Markdown.
+- Optionally persist visible numbers after a one-time opt-in.
+- Silently reorder numbers after headings are inserted, removed, or moved in an
+  opened note.
+- Update Wiki and Markdown heading links when a heading rename is uniquely
+  proven.
+- Audit existing broken heading links and repair only the targets selected by
+  the user.
 
-Virtual mode computes numbers in the editor and reading view and performs zero
-Vault writes. Persisted mode listens to file-open, save/modify, and metadata
-events, coalesces rapid changes, then compares and updates only the current note
-and metadata-indexed link sources. It does not build or persist a full-text
-Vault snapshot.
+## Numbering modes
 
-Each write stores hashes and minimal forward/reverse edits, verifies the file
-again inside Obsidian's `Vault.process`, and keeps unfinished work for restart
-recovery. Completed edit text is discarded immediately. At most 50 text-free
-summaries are retained for seven days, and all pending plus summary data is
-capped at 1 MiB.
+### Virtual mode
 
-Routine automatic work opens no confirmation dialog and shows no success
-notice. Manual preview remains a diagnostic command. The explicit Vault-wide
-audit is the only normal feature that reads every Markdown body; filtering,
-navigation, and JSON export do not write notes. Historical repair writes only
-the exact user-selected plan and refuses stale or ambiguous selections.
+Virtual mode is enabled by default. It renders numbers in the editor and reading
+view and performs no Vault writes.
+
+### Persisted mode
+
+Persisted mode requires an explicit one-time opt-in. Heading Keeper then
+maintains the currently opened Markdown note after Obsidian saves it. Routine
+maintenance is silent and does not require a preview, a manual save, or another
+confirmation.
+
+Numbering is not applied to unopened notes in the background. A note is
+reconciled when it is opened. Disable other plugins that write heading numbers
+before enabling persisted mode.
+
+## Heading-link maintenance
+
+Heading Keeper builds a lightweight reverse index from Obsidian's metadata
+cache. When a heading rename is uniquely identifiable, it updates only the
+indexed source notes that link to that heading. The heading change and its link
+updates share one durable, retryable operation.
+
+Historical broken or ambiguous links remain read-only until the user runs
+**Audit heading links**, chooses exact targets, reviews the repair plan, and
+confirms it. The audit is the only normal feature that reads every Markdown
+body.
+
+## Safety and privacy
+
+- Heading Keeper works locally and offline. It sends no network requests,
+  collects no telemetry, and does not access files outside the Vault.
+- Each write verifies the current file version and uses minimal edits through
+  Obsidian's Vault API.
+- Interrupted work is retained for retry and restart recovery. Completed edit
+  text is discarded immediately.
+- Plugin data does not contain full-note snapshots. It retains at most 50
+  text-free summaries for seven days, with pending work and summaries capped at
+  1 MiB combined.
+- Stale, conflicting, or ambiguous changes are preserved for review instead of
+  being guessed or overwritten.
+
+## Installation
+
+### Community plugins
+
+After the Community directory listing is approved, install **Heading Keeper**
+from **Settings → Community plugins → Browse**.
+
+### GitHub release
+
+Before the Community listing is available, download the release assets from the
+latest GitHub release and place `main.js` and `manifest.json` in:
+
+```text
+<vault>/.obsidian/plugins/heading-keeper/
+```
+
+Reload Obsidian, enable **Heading Keeper**, and keep virtual mode enabled while
+checking the configured heading levels and number format. Persisted mode can
+then be enabled explicitly in the plugin settings.
+
+## Commands
+
+- **Preview current reconciliation** shows the current note's planned changes.
+- **Reconcile current note now** runs maintenance for the active note.
+- **Remove managed numbering** removes only numbering owned by Heading Keeper.
+- **Refresh virtual numbering** refreshes the rendered numbers.
+- **Audit heading links** finds and guides repair of existing heading-link
+  problems.
+- **Open Heading Keeper settings** opens the plugin settings.
+
+## Compatibility
+
+- Requires Obsidian `1.12.7` or later.
+- Desktop behavior is verified for virtual rendering, persisted maintenance,
+  restart recovery, and heading-link synchronization.
+- The plugin uses mobile-compatible Obsidian APIs and declares mobile support;
+  real-device mobile validation is still in progress for version `0.2.0`.
 
 ## Development
 
@@ -45,53 +107,13 @@ Use Node `22.20.0` and pnpm `11.15.0`:
 ```bash
 corepack pnpm install
 corepack pnpm verify:local
+corepack pnpm verify:release
 ```
 
 The workspace keeps Markdown parsing and numbering logic in
-`@heading-keeper/core`, independent of Obsidian and browser APIs.
+`@heading-keeper/core`, independent of Obsidian, CodeMirror, DOM, and Vault
+APIs.
 
-## Readiness
+## License
 
-Version `0.2.0` has automated and isolated isolated test Vault coverage for silent persisted
-maintenance, per-file concurrency protection, restart recovery, bounded plugin
-data, incremental reverse-link indexing, and guided repair. It is now also the
-sole enabled heading writer in the main desktop test Vault desktop Vault, where virtual
-rendering, silent open/save reconciliation, insertion reorder, direct heading
-rename, Wiki and Markdown link synchronization, plugin reload, and unrelated
-file byte stability passed. Background changes to unopened notes update only
-the metadata index and do not trigger numbering; reconciliation starts when the
-note is actually opened. A batch whole-Vault numbering migration is not a
-replacement prerequisite. Mobile and long-running cross-device behavior remain
-separate observation gates.
-
-## Installation status
-
-The stable public release will be installed from Obsidian's Community plugins
-directory. During the closed beta, designated test Vaults use the manual
-installation below; no separate private edition exists.
-
-## Closed-beta installation
-
-Build the three release assets:
-
-```bash
-corepack pnpm build
-corepack pnpm package:plugin
-```
-
-Copy `main.js`, `manifest.json`, and `versions.json` from
-`packages/obsidian-plugin/` into
-`<vault>/.obsidian/plugins/heading-keeper/`. Enable only Heading Keeper as a
-heading writer, keep `mode: virtual`, reload Obsidian, and verify rendering and
-the read-only link audit before opting into persisted mode. To roll back,
-disable Heading Keeper and restore the previous plugin enablement and Vault
-snapshot.
-
-After copying, verify the installed bytes:
-
-```bash
-corepack pnpm verify:deployment <vault>/.obsidian/plugins/heading-keeper
-```
-
-The repository root also carries `README.md`, `LICENSE`, `manifest.json`, and
-`versions.json` in the layout required for the later public source release.
+Heading Keeper is available under the [MIT License](LICENSE).

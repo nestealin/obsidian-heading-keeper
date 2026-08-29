@@ -187,7 +187,7 @@ describe("release surface", () => {
 
     const readme = await readFile(join(repositoryRoot, "README.md"), "utf8");
     expect(readme).toContain("public community plugin");
-    expect(readme).toContain("closed beta");
+    expect(readme).not.toContain("closed beta");
     expect(readme).not.toContain("private-test build");
     expect(await readFile(join(repositoryRoot, "LICENSE"), "utf8")).toContain(
       "MIT License",
