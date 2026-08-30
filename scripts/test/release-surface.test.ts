@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -125,6 +126,20 @@ async function deploymentDirectory(): Promise<string> {
 }
 
 describe("release surface", () => {
+  it("keeps reciprocal English and Chinese README navigation resolvable", async () => {
+    const englishPath = join(repositoryRoot, "README.md");
+    const chinesePath = join(repositoryRoot, "README.zh-CN.md");
+
+    expect(existsSync(chinesePath)).toBe(true);
+
+    const english = await readFile(englishPath, "utf8");
+    const chinese = await readFile(chinesePath, "utf8");
+    expect(english).toContain("English | [简体中文](README.zh-CN.md)");
+    expect(chinese).toContain("[English](README.md) | 简体中文");
+    expect(resolve(dirname(englishPath), "README.zh-CN.md")).toBe(chinesePath);
+    expect(resolve(dirname(chinesePath), "README.md")).toBe(englishPath);
+  });
+
   it("keeps version 0.2.0 aligned across every release identity", async () => {
     const paths = [
       "package.json",

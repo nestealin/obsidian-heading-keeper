@@ -1,5 +1,7 @@
 # Heading Keeper
 
+English | [简体中文](README.zh-CN.md)
+
 Keep hierarchical heading numbers and heading-fragment links coherent in
 Obsidian.
 
