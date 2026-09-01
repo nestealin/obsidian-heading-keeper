@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   settingRows: [] as Array<{
     controls: string[];
     description: string;
+    heading: boolean;
     name: string;
   }>,
   settingTabs: [] as unknown[],
@@ -25,6 +26,18 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("obsidian", () => {
+  Object.defineProperty(globalThis, "activeWindow", {
+    configurable: true,
+    value: {
+      clearTimeout: globalThis.clearTimeout.bind(globalThis),
+      crypto: globalThis.crypto,
+      navigator: {
+        clipboard: { writeText: vi.fn() },
+      },
+      setTimeout: globalThis.setTimeout.bind(globalThis),
+    },
+  });
+
   class Plugin {
     app = {
       workspace: {
@@ -137,6 +150,7 @@ vi.mock("obsidian", () => {
     private readonly row = {
       controls: [] as string[],
       description: "",
+      heading: false,
       name: "",
     };
 
@@ -151,6 +165,11 @@ vi.mock("obsidian", () => {
 
     setDesc(description: string) {
       this.row.description = description;
+      return this;
+    }
+
+    setHeading() {
+      this.row.heading = true;
       return this;
     }
 
@@ -386,6 +405,7 @@ describe("HeadingKeeperPlugin", () => {
     tab.display();
 
     expect(state.settingRows.map((row) => row.name)).toEqual([
+      "Heading Keeper",
       "Numbering mode",
       "Keep heading links updated",
       "Top heading level",
@@ -397,9 +417,18 @@ describe("HeadingKeeperPlugin", () => {
       "Language",
       "Recovery center",
     ]);
-    expect(state.settingRows.every((row) => row.description.length > 0)).toBe(
-      true,
-    );
+    expect(state.settingRows[0]).toMatchObject({
+      controls: [],
+      heading: true,
+      name: "Heading Keeper",
+    });
+    expect(
+      (tab as { containerEl: { createEl: ReturnType<typeof vi.fn> } })
+        .containerEl.createEl,
+    ).not.toHaveBeenCalledWith("h2", expect.anything());
+    expect(
+      state.settingRows.slice(1).every((row) => row.description.length > 0),
+    ).toBe(true);
   });
 
   it("merges two rapid SettingTab control changes against committed settings", async () => {

@@ -82,8 +82,8 @@ function buildSegments(
   compactLevels: ReadonlySet<HeadingLevel> | undefined,
 ): number[] {
   const segments: number[] = [];
-  for (let cursor = settings.topLevel; cursor <= level; cursor += 1) {
-    const headingLevel = cursor as HeadingLevel;
+  for (const headingLevel of [1, 2, 3, 4, 5, 6] as const) {
+    if (headingLevel < settings.topLevel || headingLevel > level) continue;
     if (
       settings.gapStrategy === "compact" &&
       !compactLevels?.has(headingLevel)
@@ -91,7 +91,7 @@ function buildSegments(
       continue;
     }
 
-    const value = counters[cursor] ?? 0;
+    const value = counters[headingLevel] ?? 0;
     segments.push(
       settings.gapStrategy === "one-fill" &&
         headingLevel > settings.topLevel &&

@@ -106,7 +106,7 @@ then be enabled explicitly in the plugin settings.
 - Desktop behavior is verified for virtual rendering, persisted maintenance,
   restart recovery, and heading-link synchronization.
 - The plugin uses mobile-compatible Obsidian APIs and declares mobile support;
-  real-device mobile validation is still in progress for version `0.2.0`.
+  real-device mobile validation is still in progress for version `0.2.1`.
 
 ## Development
 

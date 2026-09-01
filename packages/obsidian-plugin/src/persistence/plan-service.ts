@@ -30,8 +30,11 @@ export class PersistedPlanError extends Error {
   }
 }
 
-export async function sha256Text(text: string): Promise<string> {
-  const digest = await globalThis.crypto.subtle.digest(
+export async function sha256Text(
+  text: string,
+  cryptoSource: Pick<Crypto, "subtle"> = crypto,
+): Promise<string> {
+  const digest = await cryptoSource.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(text),
   );

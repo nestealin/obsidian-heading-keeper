@@ -5,6 +5,8 @@ docs/requirement-test-evidence.md
 .worktrees/
 artifacts/
 node_modules/
+/main.js
+/main.js.map
 packages/*/dist/
 packages/obsidian-plugin/main.js
 packages/obsidian-plugin/main.js.map

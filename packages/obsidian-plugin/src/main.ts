@@ -126,7 +126,9 @@ export class HeadingKeeperSettingTab extends PluginSettingTab {
     const locale = this.headingKeeper.currentLocale();
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: translate(locale, "settings.heading") });
+    new Setting(containerEl)
+      .setName(translate(locale, "settings.heading"))
+      .setHeading();
 
     new Setting(containerEl)
       .setName(translate(locale, "settings.mode"))
@@ -349,11 +351,14 @@ export class HeadingKeeperPlugin extends Plugin {
       operationDependencies: {
         createId: createOperationId,
         now: () => new Date().toISOString(),
-        hashText: sha256Text,
+        hashText: (text) => sha256Text(text, activeWindow.crypto),
       },
       journal: this.dataStore!.journal,
       execute: (operation) => this.executeAutomaticMaintenance(operation),
       now: () => Date.now(),
+      setTimer: (callback, delayMs) =>
+        activeWindow.setTimeout(callback, delayMs),
+      clearTimer: (handle) => activeWindow.clearTimeout(handle as number),
       onConflict: (_operation, code) => {
         if (this.disposed) return;
         this.showNotice(
@@ -802,7 +807,7 @@ export class HeadingKeeperPlugin extends Plugin {
         });
       },
       exported: (json) => {
-        void globalThis.navigator?.clipboard?.writeText(json);
+        void activeWindow.navigator.clipboard?.writeText(json);
       },
       closed: () => this.openModals.delete(modal),
     });
@@ -1394,11 +1399,11 @@ function isSettingsManager(value: unknown): value is SettingsManagerCapability {
 }
 
 function createOperationId(): string {
-  if (typeof globalThis.crypto.randomUUID === "function") {
-    return globalThis.crypto.randomUUID();
+  if (typeof activeWindow.crypto.randomUUID === "function") {
+    return activeWindow.crypto.randomUUID();
   }
   const bytes = new Uint8Array(16);
-  globalThis.crypto.getRandomValues(bytes);
+  activeWindow.crypto.getRandomValues(bytes);
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
     "",
   );

@@ -278,12 +278,12 @@ export class AutomaticMaintenance {
   private setTimer(callback: () => void, delayMs: number): unknown {
     return this.dependencies.setTimer
       ? this.dependencies.setTimer(callback, delayMs)
-      : globalThis.setTimeout(callback, delayMs);
+      : setTimeout(callback, delayMs);
   }
 
   private clearTimer(handle: unknown): void {
     if (this.dependencies.clearTimer) this.dependencies.clearTimer(handle);
-    else globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>);
+    else clearTimeout(handle as ReturnType<typeof setTimeout>);
   }
 }
 

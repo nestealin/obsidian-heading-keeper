@@ -11,7 +11,7 @@ const repositoryRoot = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "../..",
 );
-const artifact = join(repositoryRoot, "artifacts/heading-keeper-0.2.0.zip");
+const artifact = join(repositoryRoot, "artifacts/heading-keeper-0.2.1.zip");
 const packageScript = join(repositoryRoot, "scripts/package-plugin.mjs");
 const releaseRejectedScript = join(
   repositoryRoot,
@@ -140,7 +140,7 @@ describe("release surface", () => {
     expect(resolve(dirname(chinesePath), "README.md")).toBe(englishPath);
   });
 
-  it("keeps version 0.2.0 aligned across every release identity", async () => {
+  it("keeps version 0.2.1 aligned across every release identity", async () => {
     const paths = [
       "package.json",
       "manifest.json",
@@ -155,13 +155,13 @@ describe("release surface", () => {
       ),
     );
     expect(versions.map((value) => value.version)).toEqual(
-      paths.map(() => "0.2.0"),
+      paths.map(() => "0.2.1"),
     );
     const coreIdentity = await readFile(
       join(repositoryRoot, "packages/core/src/index.ts"),
       "utf8",
     );
-    expect(coreIdentity).toContain('version: "0.2.0"');
+    expect(coreIdentity).toContain('version: "0.2.1"');
 
     const rootManifestText = await readFile(
       join(repositoryRoot, "manifest.json"),
@@ -185,7 +185,7 @@ describe("release surface", () => {
       isDesktopOnly: false,
       minAppVersion: "1.12.7",
       name: "Heading Keeper",
-      version: "0.2.0",
+      version: "0.2.1",
     });
     expect(rootManifest.id).toMatch(/^[a-z0-9-]+$/u);
     expect(String(rootManifest.id)).not.toContain("obsidian");
@@ -348,6 +348,20 @@ describe("release surface", () => {
     expect(bundle).not.toContain("SavedHeadingLinkSync");
     expect(bundle).not.toMatch(
       /require\(["'](?:node:)?(?:assert|buffer|child_process|crypto|fs|http|https|net|path|process|stream|url|util|worker_threads)["']\)|require\(["']electron["']\)|(?:fetch|XMLHttpRequest|WebSocket)\s*\(/iu,
+    );
+  });
+
+  it("places a byte-identical main.js at the repository root for Community build verification", async () => {
+    execFileSync(
+      "corepack",
+      ["pnpm", "--filter", "@heading-keeper/obsidian-plugin", "build"],
+      {
+        cwd: repositoryRoot,
+      },
+    );
+
+    expect(await readFile(join(repositoryRoot, "main.js"))).toEqual(
+      await readFile(join(pluginDirectory, "main.js")),
     );
   });
 

@@ -46,6 +46,12 @@ describe("production bundle surface", () => {
     expect(bundle).toContain("recovery-required");
 
     runInNewContext(bundle, {
+      activeWindow: {
+        clearTimeout: globalThis.clearTimeout.bind(globalThis),
+        crypto: globalThis.crypto,
+        navigator: {},
+        setTimeout: globalThis.setTimeout.bind(globalThis),
+      },
       exports: module.exports,
       module,
       require: (identifier: string) => {

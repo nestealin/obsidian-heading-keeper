@@ -14,6 +14,18 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("obsidian", () => {
+  Object.defineProperty(globalThis, "activeWindow", {
+    configurable: true,
+    value: {
+      clearTimeout: globalThis.clearTimeout.bind(globalThis),
+      crypto: globalThis.crypto,
+      navigator: {
+        clipboard: { writeText: vi.fn() },
+      },
+      setTimeout: globalThis.setTimeout.bind(globalThis),
+    },
+  });
+
   class TFile {
     readonly extension: string;
     constructor(readonly path: string) {

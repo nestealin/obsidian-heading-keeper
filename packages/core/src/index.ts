@@ -1,6 +1,6 @@
 export const packageIdentity = Object.freeze({
   id: "heading-keeper",
-  version: "0.2.0",
+  version: "0.2.1",
 });
 
 export { DEFAULT_SETTINGS, validateSettings } from "./settings.js";
