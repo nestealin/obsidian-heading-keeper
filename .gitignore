@@ -1,5 +1,7 @@
 .DS_Store
 .superpowers/
+docs/superpowers/
+docs/requirement-test-evidence.md
 .worktrees/
 artifacts/
 node_modules/

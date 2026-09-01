@@ -88,7 +88,7 @@ function zipEntry(name, content, offset) {
 async function packagePlugin() {
   execFileSync(
     "corepack",
-    ["pnpm", "--filter", "@heading-keeper/obsidian-plugin", "build"],
+    ["pnpm", "--filter", "@heading-keeper/obsidian-plugin...", "build"],
     { cwd: repositoryRoot, stdio: "inherit" },
   );
   const entries = [];

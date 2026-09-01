@@ -62,4 +62,23 @@ describe("clean workspace gate", () => {
       0,
     );
   }, 30_000);
+
+  it("packages the release without pre-existing package dist outputs", async () => {
+    const checkout = await copyTrackedCheckout();
+    const install = spawnSync(
+      "corepack",
+      ["pnpm", "install", "--offline", "--frozen-lockfile"],
+      {
+        cwd: checkout,
+        encoding: "utf8",
+      },
+    );
+    expect(install.status, `${install.stdout}\n${install.stderr}`).toBe(0);
+
+    const packaged = spawnSync("corepack", ["pnpm", "package:plugin"], {
+      cwd: checkout,
+      encoding: "utf8",
+    });
+    expect(packaged.status, `${packaged.stdout}\n${packaged.stderr}`).toBe(0);
+  }, 30_000);
 });

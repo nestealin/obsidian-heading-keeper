@@ -61,6 +61,12 @@ body.
 - Plugin data does not contain full-note snapshots. It retains at most 50
   text-free summaries for seven days, with pending work and summaries capped at
   1 MiB combined.
+- Pending recovery data is stored in
+  `<vault>/.obsidian/plugins/heading-keeper/data.json`. It contains hashes and
+  minimal changed fragments, not full note bodies. Disable the plugin and
+  delete this file to clear its local state.
+- A full-vault heading-link audit reads Markdown bodies only in memory after an
+  explicit command; audit text is neither persisted nor transmitted.
 - Stale, conflicting, or ambiguous changes are preserved for review instead of
   being guessed or overwritten.
 
