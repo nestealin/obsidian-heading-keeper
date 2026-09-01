@@ -2,23 +2,30 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Keep hierarchical heading numbers and heading-fragment links coherent in
-Obsidian.
+Automatic heading numbers that keep links alive.
 
-Heading Keeper is a public community plugin designed to work locally and
-offline.
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="assets/readme/heading-keeper-demo-poster.png">
+  <img src="assets/readme/heading-keeper-demo.gif" alt="Heading Keeper silently renumbers an Obsidian outline, updates a linked note after a heading rename, and opens the repaired link." width="960">
+</picture>
 
-## Features
+**Virtual by default · Persisted integrity by opt-in · Local and offline**
 
-- Show configurable hierarchical numbers in the editor and reading view without
-  changing Markdown.
-- Optionally persist visible numbers after a one-time opt-in.
-- Silently reorder numbers after headings are inserted, removed, or moved in an
-  opened note.
-- Update Wiki and Markdown heading links when a heading rename is uniquely
-  proven.
-- Audit existing broken heading links and repair only the targets selected by
-  the user.
+Virtual mode never changes Markdown. The animation shows persisted mode after
+its one-time opt-in: numbering and unambiguous heading links stay synchronized
+without manual saves or routine confirmation dialogs.
+
+Heading Keeper is a public community plugin for Obsidian, built for local and
+offline use.
+
+[Install](#installation) · [Download the latest release](https://github.com/nestealin/obsidian-heading-keeper/releases/latest)
+
+## Why Heading Keeper
+
+- Insert, remove, or move a heading and its hierarchy is silently renumbered.
+- Rename a uniquely referenced heading and Wiki or Markdown links follow it.
+- Audit older broken links separately, with an explicit review before repair.
+- Keep all processing local: no network requests and no telemetry.
 
 ## Numbering modes
 
@@ -74,8 +81,8 @@ body.
 
 ### Community plugins
 
-After the Community directory listing is approved, install **Heading Keeper**
-from **Settings → Community plugins → Browse**.
+Find **Heading Keeper** in **Settings → Community plugins → Browse**. If the
+listing is still under review, use the GitHub release method below.
 
 ### GitHub release
 
