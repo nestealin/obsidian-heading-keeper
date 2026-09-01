@@ -2,17 +2,28 @@
 
 [English](README.md) | 简体中文
 
-让 Obsidian 中的层级标题编号与标题片段链接保持一致。
+自动维护标题编号，也让标题链接始终可用。
 
-Heading Keeper 是面向公众的社区插件，完全在本地离线运行。
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="assets/readme/heading-keeper-demo-poster.png">
+  <img src="assets/readme/heading-keeper-demo.gif" alt="Heading Keeper 在 Obsidian 中静默重排标题编号，并在标题改名后更新关联笔记中的链接，最后打开修复后的链接。" width="960">
+</picture>
 
-## 功能
+**虚拟模式默认启用 · 持久化维护显式开启 · 完全本地离线**
 
-- 在编辑视图和阅读视图中显示可配置的层级编号，不修改 Markdown。
-- 用户显式启用一次后，可以将可见编号持久化到笔记。
-- 在已打开的笔记中插入、删除或移动标题后，静默重排编号。
-- 当标题改名能够被唯一确认时，同步更新 Wiki 链接和 Markdown 标题链接。
-- 审计已有的标题断链，并且只修复用户明确选择的目标。
+虚拟模式不会修改 Markdown。动画展示的是完成一次显式授权后的持久化模式：
+无需手动保存或日常确认，编号和无歧义的标题链接会自动保持同步。
+
+Heading Keeper 是面向 Obsidian 的公开社区插件，完全在本地离线运行。
+
+[安装](#安装) · [下载最新版本](https://github.com/nestealin/obsidian-heading-keeper/releases/latest)
+
+## 为什么选择 Heading Keeper
+
+- 插入、删除或移动标题后，层级编号会静默重排。
+- 当标题改名能够被唯一确认时，Wiki 链接和 Markdown 链接会同步更新。
+- 历史断链使用独立审计流程，修复前仍需用户明确检查和确认。
+- 所有处理都在本地完成，不发送网络请求，也不收集遥测。
 
 ## 编号模式
 
@@ -55,7 +66,8 @@ Heading Keeper 基于 Obsidian metadata cache 建立轻量反向索引。当标�
 
 ### 社区插件
 
-社区目录审核通过后，可以从 **设置 → 第三方插件 → 浏览** 中安装 **Heading Keeper**。
+在 **设置 → 第三方插件 → 浏览** 中搜索 **Heading Keeper**。如果社区目录仍在审核，
+请使用下面的 GitHub Release 安装方式。
 
 ### GitHub Release
 
