@@ -10,6 +10,7 @@ import {
 } from "@heading-keeper/link-core";
 import type {
   HashText,
+  CompareAndUpdateResult,
   PlannedTextEdit,
   VaultFileAdapter,
 } from "./persistence/types.js";
@@ -28,11 +29,41 @@ type MetadataIndexSurface = Pick<
 >;
 type MarkdownFilesSurface = Pick<Vault, "getMarkdownFiles">;
 
+export type OpenEditorReadResult =
+  | { readonly kind: "closed" }
+  | { readonly kind: "busy" }
+  | { readonly kind: "ready"; readonly text: string };
+
+export interface OpenEditorFileSurface {
+  read(path: string): OpenEditorReadResult;
+  compareAndUpdate(
+    path: string,
+    expectedHash: string,
+    resultingHash: string,
+    edits: readonly PlannedTextEdit[],
+    hashText: HashText,
+  ): Promise<CompareAndUpdateResult | { readonly kind: "closed" }>;
+}
+
+export class EditorFileBusyError extends Error {
+  readonly name = "EditorFileBusyError";
+}
+
 export class ObsidianVaultFileAdapter implements VaultFileAdapter {
-  constructor(private readonly vault: VaultSurface) {}
+  constructor(
+    private readonly vault: VaultSurface,
+    private readonly openEditors?: OpenEditorFileSurface,
+  ) {}
 
   async read(path: string): Promise<string> {
+    const editor = this.openEditors?.read(path);
+    if (editor?.kind === "ready") return editor.text;
+    if (editor?.kind === "busy") throw new EditorFileBusyError();
     return this.vault.read(this.existingFile(path));
+  }
+
+  isTransientError(error: unknown): boolean {
+    return error instanceof EditorFileBusyError;
   }
 
   async compareAndUpdate(
@@ -43,6 +74,25 @@ export class ObsidianVaultFileAdapter implements VaultFileAdapter {
     hashText: HashText,
   ) {
     const file = this.existingFile(path);
+    const editorResult = await this.openEditors?.compareAndUpdate(
+      path,
+      expectedHash,
+      resultingHash,
+      edits,
+      hashText,
+    );
+    if (editorResult && editorResult.kind !== "closed") {
+      if (
+        editorResult.kind === "updated" ||
+        editorResult.kind === "already-applied"
+      ) {
+        const saved = await this.vault.read(file);
+        if ((await hashText(saved)) !== resultingHash) {
+          throw new Error("editor-readback-mismatch");
+        }
+      }
+      return editorResult;
+    }
     const snapshot = await this.vault.read(file);
     const currentHash = await hashText(snapshot);
     if (currentHash === resultingHash) {

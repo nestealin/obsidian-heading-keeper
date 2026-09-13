@@ -165,6 +165,7 @@ vi.mock("obsidian", () => {
     }
   }
   return {
+    activeWindow: { navigator: { clipboard: { writeText: vi.fn() } } },
     MarkdownRenderChild,
     Modal,
     Notice,
@@ -176,6 +177,7 @@ vi.mock("obsidian", () => {
 });
 
 vi.mock("../src/editor-extension.js", () => ({
+  openEditorFileSurface: undefined,
   createHeadingKeeperExtension: () => ({}),
   refreshHeadingKeeperExtensions: () => undefined,
 }));
@@ -209,39 +211,39 @@ describe("HeadingKeeper saved heading integration", () => {
     const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
 
-    state.content.set("Target.md", "## New title\n");
+    state.content.set("Target.md", "## 1. New title\n");
     const target = new TFile("Target.md");
-    await state.events.get("changed")?.(target, "## New title\n", {
-      headings: [{ heading: "New title", level: 2, position: {} as never }],
+    await state.events.get("changed")?.(target, "## 1. New title\n", {
+      headings: [{ heading: "1. New title", level: 2, position: {} as never }],
     });
     await state.events.get("modify")?.(target);
     await maintenanceAccess(plugin).flush();
 
-    expect(state.writes).toEqual(["Target.md", "Refs.md"]);
+    expect(state.writes).toEqual(["Refs.md"]);
     expect(state.content.get("Target.md")).toBe("## 1. New title\n");
     expect(state.content.get("Refs.md")).toBe("[[Target#1. New title|alias]]");
     expect(state.notices).toEqual([]);
   });
 
-  it("preserves all link sources for a compound heading change", async () => {
+  it("leaves ambiguous compound heading changes and their links untouched", async () => {
     state.activePath = "Target.md";
     state.content.set("Target.md", "## A\n## B\n");
     state.content.set("Refs.md", "[[Target#A]] [[Target#B]]");
     const plugin = new HeadingKeeperPlugin();
     await plugin.onload();
 
-    state.content.set("Target.md", "## C\n## D\n");
+    state.content.set("Target.md", "## 1. C\n## 2. D\n");
     const target = new TFile("Target.md");
-    await state.events.get("changed")?.(target, "## C\n## D\n", {
+    await state.events.get("changed")?.(target, "## 1. C\n## 2. D\n", {
       headings: [
-        { heading: "C", level: 2, position: {} as never },
-        { heading: "D", level: 2, position: {} as never },
+        { heading: "1. C", level: 2, position: {} as never },
+        { heading: "2. D", level: 2, position: {} as never },
       ],
     });
     await state.events.get("modify")?.(target);
     await maintenanceAccess(plugin).flush();
 
-    expect(state.writes).toEqual(["Target.md"]);
+    expect(state.writes).toEqual([]);
     expect(state.content.get("Target.md")).toBe("## 1. C\n## 2. D\n");
     expect(state.content.get("Refs.md")).toBe("[[Target#A]] [[Target#B]]");
     expect(state.notices).toEqual([]);

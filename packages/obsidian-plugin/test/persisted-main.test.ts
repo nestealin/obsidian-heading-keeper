@@ -250,6 +250,7 @@ vi.mock("obsidian", () => {
     }
   }
   return {
+    activeWindow: { navigator: { clipboard: { writeText: vi.fn() } } },
     MarkdownRenderChild,
     Modal,
     Notice,
@@ -261,6 +262,7 @@ vi.mock("obsidian", () => {
 });
 
 vi.mock("../src/editor-extension.js", () => ({
+  openEditorFileSurface: undefined,
   createHeadingKeeperExtension: () => ({}),
   refreshHeadingKeeperExtensions: () => undefined,
 }));

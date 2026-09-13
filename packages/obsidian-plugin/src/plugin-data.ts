@@ -1,4 +1,5 @@
 import type { FieldError } from "@heading-keeper/core";
+import type { HeadingRename } from "@heading-keeper/link-core";
 import { snapshotOperation } from "./persistence/journal.js";
 import { invertEdits } from "./persistence/edits.js";
 import { validatePersistedOperation } from "./persistence/operation-validator.js";
@@ -24,6 +25,14 @@ export interface PersistedPluginData {
   readonly journals: Readonly<Record<string, PersistedOperation>>;
   readonly latestJournalId: string | null;
   readonly summaries: readonly OperationSummary[];
+  readonly renameIntents?: Readonly<Record<string, HeadingRenameIntent>>;
+}
+
+export interface HeadingRenameIntent {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly targetPath: string;
+  readonly renames: readonly HeadingRename[];
 }
 
 export interface LoadedPluginData {
@@ -40,6 +49,7 @@ interface CandidateState {
   journals: Map<string, PersistedOperation>;
   latestJournalId: string | null;
   summaries: OperationSummary[];
+  renameIntents: Map<string, HeadingRenameIntent>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -64,16 +74,24 @@ function dataSnapshot(
   journals: ReadonlyMap<string, PersistedOperation>,
   latestJournalId: string | null,
   summaries: readonly OperationSummary[],
+  renameIntents: ReadonlyMap<string, HeadingRenameIntent>,
 ): PersistedPluginData {
   const storedJournals: Record<string, PersistedOperation> = {};
   for (const [id, operation] of journals) {
     storedJournals[id] = snapshotOperation(operation);
   }
-  return {
+  const snapshot: PersistedPluginData = {
     settings: { ...settings },
     journals: storedJournals,
     latestJournalId,
     summaries: summaries.map((summary) => ({ ...summary })),
+  };
+  if (renameIntents.size === 0) return snapshot;
+  return {
+    ...snapshot,
+    renameIntents: Object.fromEntries(
+      [...renameIntents].map(([id, intent]) => [id, copyRenameIntent(intent)]),
+    ),
   };
 }
 
@@ -82,7 +100,38 @@ export class PluginDataStore {
   private readonly journals = new Map<string, PersistedOperation>();
   private currentLatestJournalId: string | null = null;
   private currentSummaries: OperationSummary[] = [];
+  private readonly currentRenameIntents = new Map<
+    string,
+    HeadingRenameIntent
+  >();
   private saveTail: Promise<void> = Promise.resolve();
+
+  readonly renameIntents = {
+    list: (targetPath?: string): readonly HeadingRenameIntent[] =>
+      [...this.currentRenameIntents.values()]
+        .filter(
+          (intent) =>
+            targetPath === undefined || intent.targetPath === targetPath,
+        )
+        .sort(
+          (left, right) =>
+            compareCodeUnits(left.createdAt, right.createdAt) ||
+            compareCodeUnits(left.id, right.id),
+        )
+        .map(copyRenameIntent),
+    stage: async (intent: HeadingRenameIntent): Promise<void> => {
+      const snapshot = validRenameIntent(intent);
+      if (!snapshot) throw new Error("rename-intent-invalid");
+      await this.enqueueSave((candidate) => {
+        candidate.renameIntents.set(snapshot.id, snapshot);
+      });
+    },
+    remove: async (ids: readonly string[]): Promise<void> => {
+      await this.enqueueSave((candidate) => {
+        for (const id of ids) candidate.renameIntents.delete(id);
+      });
+    },
+  };
 
   readonly journal: JournalStore = {
     load: async (id) => {
@@ -162,12 +211,17 @@ export class PluginDataStore {
     this.journals.clear();
     this.currentLatestJournalId = null;
     this.currentSummaries = [];
+    this.currentRenameIntents.clear();
 
     const envelope =
       isRecord(raw) &&
-      ["settings", "journals", "latestJournalId", "summaries"].some((key) =>
-        hasOwnKey(raw, key),
-      );
+      [
+        "settings",
+        "journals",
+        "latestJournalId",
+        "summaries",
+        "renameIntents",
+      ].some((key) => hasOwnKey(raw, key));
     const settingsInput = envelope ? own(raw, "settings") : raw;
     const fresh = raw === null || raw === undefined;
     const settingsValidation = fresh
@@ -243,6 +297,19 @@ export class PluginDataStore {
       } else if (rawSummaries !== undefined) {
         diagnostics.push("summary-invalid");
       }
+      const rawRenameIntents = own(raw, "renameIntents");
+      if (isRecord(rawRenameIntents)) {
+        for (const [id, candidate] of Object.entries(rawRenameIntents)) {
+          const intent = validRenameIntent(candidate);
+          if (!intent || intent.id !== id) {
+            diagnostics.push("rename-intent-invalid");
+          } else {
+            this.currentRenameIntents.set(id, intent);
+          }
+        }
+      } else if (rawRenameIntents !== undefined) {
+        diagnostics.push("rename-intent-invalid");
+      }
     }
     if (!this.currentLatestJournalId) {
       this.currentLatestJournalId =
@@ -308,6 +375,7 @@ export class PluginDataStore {
         journals: new Map(this.journals),
         latestJournalId: this.currentLatestJournalId,
         summaries: this.currentSummaries.map((summary) => ({ ...summary })),
+        renameIntents: new Map(this.currentRenameIntents),
       };
       mutate(candidate);
       candidate.summaries = applySummaryRetention(
@@ -319,6 +387,7 @@ export class PluginDataStore {
         candidate.journals,
         candidate.latestJournalId,
         candidate.summaries,
+        candidate.renameIntents,
       );
       if (serializedByteLength(payload) > DEFAULT_RETENTION_POLICY.maxBytes) {
         throw new Error("storage-limit");
@@ -331,10 +400,67 @@ export class PluginDataStore {
       }
       this.currentLatestJournalId = candidate.latestJournalId;
       this.currentSummaries = candidate.summaries;
+      this.currentRenameIntents.clear();
+      for (const [id, intent] of candidate.renameIntents) {
+        this.currentRenameIntents.set(id, intent);
+      }
     });
     this.saveTail = task.catch(() => undefined);
     return task;
   }
+}
+
+function copyRenameIntent(intent: HeadingRenameIntent): HeadingRenameIntent {
+  return {
+    id: intent.id,
+    createdAt: intent.createdAt,
+    targetPath: intent.targetPath,
+    renames: intent.renames.map((rename) => ({ ...rename })),
+  };
+}
+
+function validRenameIntent(value: unknown): HeadingRenameIntent | null {
+  if (!isRecord(value)) return null;
+  const id = own(value, "id");
+  const createdAt = own(value, "createdAt");
+  const targetPath = own(value, "targetPath");
+  const renames = own(value, "renames");
+  if (
+    typeof id !== "string" ||
+    id.length === 0 ||
+    typeof createdAt !== "string" ||
+    !Number.isFinite(Date.parse(createdAt)) ||
+    typeof targetPath !== "string" ||
+    targetPath.length === 0 ||
+    !Array.isArray(renames) ||
+    renames.length === 0 ||
+    renames.length > 256
+  ) {
+    return null;
+  }
+  const validated: HeadingRename[] = [];
+  for (const candidate of renames) {
+    if (!isRecord(candidate)) return null;
+    const renameTargetPath = own(candidate, "targetPath");
+    const oldHeading = own(candidate, "oldHeading");
+    const newHeading = own(candidate, "newHeading");
+    if (
+      renameTargetPath !== targetPath ||
+      typeof oldHeading !== "string" ||
+      oldHeading.length === 0 ||
+      typeof newHeading !== "string" ||
+      newHeading.length === 0 ||
+      oldHeading === newHeading
+    ) {
+      return null;
+    }
+    validated.push({
+      targetPath,
+      oldHeading,
+      newHeading,
+    });
+  }
+  return copyRenameIntent({ id, createdAt, targetPath, renames: validated });
 }
 
 function isRecoverable(operation: PersistedOperation): boolean {

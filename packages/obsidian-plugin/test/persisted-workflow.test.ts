@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_STORED_SETTINGS } from "../src/settings.js";
 import { sha256Text } from "../src/persistence/plan-service.js";
-import { buildWorkflowPreview } from "../src/persisted-workflow.js";
+import {
+  buildRenameOnlyOperation,
+  buildWorkflowPreview,
+} from "../src/persisted-workflow.js";
 import { applyCheckedEdits } from "../src/persistence/edits.js";
 import type { PlannedFileChange } from "../src/persistence/types.js";
 
@@ -18,6 +21,44 @@ function after(beforeText: string, file: PlannedFileChange | undefined) {
 }
 
 describe("buildWorkflowPreview", () => {
+  it("builds link-only automatic work without materializing target numbering from disk", async () => {
+    const target = "## Renamed\n[[#Old]]";
+    const links = "[[Target#Old]]";
+
+    const result = await buildRenameOnlyOperation(
+      {
+        targetPath: "Target.md",
+        sources: [
+          { path: "Target.md", text: target },
+          { path: "Links.md", text: links },
+        ],
+        renames: [
+          {
+            targetPath: "Target.md",
+            oldHeading: "Old",
+            newHeading: "Renamed",
+          },
+        ],
+        resolveTarget: (sourcePath, linkPath) => ({
+          kind: "file",
+          path: linkPath === "" ? sourcePath : "Target.md",
+        }),
+      },
+      deps,
+    );
+
+    expect(result.kind).toBe("operation");
+    if (result.kind !== "operation") return;
+    const byPath = new Map(
+      result.operation.files.map((file) => [file.path, file]),
+    );
+    expect(after(target, byPath.get("Target.md"))).toBe(
+      "## Renamed\n[[#Renamed]]",
+    );
+    expect(after(links, byPath.get("Links.md"))).toBe("[[Target#Renamed]]");
+    expect(after(target, byPath.get("Target.md"))).not.toContain("## 1.");
+  });
+
   it("builds global target and link-source edits for wiki and markdown links", async () => {
     const result = await buildWorkflowPreview(
       {

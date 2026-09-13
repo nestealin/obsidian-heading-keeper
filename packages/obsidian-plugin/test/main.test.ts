@@ -4,6 +4,18 @@ import { DEFAULT_STORED_SETTINGS } from "../src/settings.js";
 const state = vi.hoisted(() => ({
   commands: [] as Array<{ id: string; callback?: () => void }>,
   editorExtensions: [] as unknown[],
+  editorMaintenanceHooks: undefined as
+    | {
+        cancel(intentId: string): Promise<unknown>;
+        stage(materialization: {
+          renames: Array<{
+            targetPath: string;
+            oldHeading: string;
+            newHeading: string;
+          }>;
+        }): Promise<string>;
+      }
+    | undefined,
   editorRefreshes: 0,
   loadedData: undefined as unknown,
   notices: [] as string[],
@@ -247,6 +259,7 @@ vi.mock("obsidian", () => {
   }
 
   return {
+    activeWindow: { navigator: { clipboard: { writeText: vi.fn() } } },
     MarkdownRenderChild,
     Modal,
     Notice,
@@ -258,7 +271,14 @@ vi.mock("obsidian", () => {
 });
 
 vi.mock("../src/editor-extension.js", () => ({
-  createHeadingKeeperExtension: () => ({}),
+  openEditorFileSurface: undefined,
+  createHeadingKeeperExtension: (
+    _settings: unknown,
+    hooks: typeof state.editorMaintenanceHooks,
+  ) => {
+    state.editorMaintenanceHooks = hooks;
+    return {};
+  },
   refreshHeadingKeeperExtensions: () => {
     state.editorRefreshes += 1;
   },
@@ -269,6 +289,7 @@ import { HeadingKeeperPlugin } from "../src/main.js";
 beforeEach(() => {
   state.commands.length = 0;
   state.editorExtensions.length = 0;
+  state.editorMaintenanceHooks = undefined;
   state.editorRefreshes = 0;
   state.loadedData = undefined;
   state.notices.length = 0;
@@ -286,6 +307,37 @@ beforeEach(() => {
 });
 
 describe("HeadingKeeperPlugin", () => {
+  it("persists and cancels editor rename intents through the registered extension hooks", async () => {
+    const plugin = new HeadingKeeperPlugin();
+    await plugin.onload();
+    const hooks = state.editorMaintenanceHooks;
+    expect(hooks).toBeDefined();
+    if (!hooks) return;
+
+    const intentId = await hooks.stage({
+      renames: [
+        {
+          targetPath: "Target.md",
+          oldHeading: "Alpha",
+          newHeading: "1. Alpha",
+        },
+      ],
+    });
+
+    expect(intentId).toBeTruthy();
+    expect(state.savedData.at(-1)).toMatchObject({
+      renameIntents: {
+        [intentId]: {
+          id: intentId,
+          targetPath: "Target.md",
+        },
+      },
+    });
+
+    await hooks.cancel(intentId);
+    expect(state.savedData.at(-1)).not.toHaveProperty("renameIntents");
+  });
+
   it("loads virtual defaults and registers the six stable commands", async () => {
     const plugin = new HeadingKeeperPlugin();
 

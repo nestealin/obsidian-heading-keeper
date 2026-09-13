@@ -1,7 +1,15 @@
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -340,7 +348,6 @@ describe("release surface", () => {
         encoding: "utf8",
       },
     );
-
     expect(versions[manifest.version]).toBe(manifest.minAppVersion);
     expect(bundle).not.toContain("sourceMappingURL");
     expect(bundle).toContain("file-open");
@@ -381,6 +388,23 @@ describe("release surface", () => {
     expect(result.stdout).toContain("main.js sha256=");
     expect(result.stdout).toContain("manifest.json sha256=");
     expect(result.stdout).toContain("versions.json sha256=");
+  });
+
+  it("verifies an existing release artifact without rebuilding it", async () => {
+    execFileSync(
+      "corepack",
+      ["pnpm", "--filter", "@heading-keeper/obsidian-plugin", "build"],
+      { cwd: repositoryRoot },
+    );
+    const directory = await deploymentDirectory();
+    const bundlePath = join(pluginDirectory, "main.js");
+    const before = await stat(bundlePath);
+
+    const result = run(verifyDeploymentScript, [directory]);
+    const after = await stat(bundlePath);
+
+    expect(result.status).toBe(0);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
   });
 
   it("rejects incomplete, non-file, and every non-allowlisted deployment entry", async () => {

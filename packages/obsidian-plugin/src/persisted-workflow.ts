@@ -12,9 +12,13 @@ import {
   type LinkDiagnosticCode,
   type ResolvedTarget,
 } from "@heading-keeper/link-core";
-import { buildPersistedOperation } from "./persistence/plan-service.js";
+import {
+  buildLinkOnlyOperation,
+  buildPersistedOperation,
+} from "./persistence/plan-service.js";
 import type {
   BuildPersistedOperationDependencies,
+  BuildPersistedOperationResult,
   PersistedOperation,
   PlannedTextEdit,
 } from "./persistence/types.js";
@@ -37,6 +41,16 @@ export interface WorkflowPreviewInput {
     linkPath: string,
   ) => ResolvedTarget;
   readonly additionalRenames?: readonly HeadingRename[];
+}
+
+export interface RenameOnlyOperationInput {
+  readonly targetPath: string;
+  readonly sources: readonly MarkdownSource[];
+  readonly renames: readonly HeadingRename[];
+  readonly resolveTarget: (
+    sourcePath: string,
+    linkPath: string,
+  ) => ResolvedTarget;
 }
 
 export const WORKFLOW_REASON_CODES = [
@@ -212,6 +226,40 @@ function composeRenames(
       newHeading: finalHeading(rename),
     })),
   ];
+}
+
+export async function buildRenameOnlyOperation(
+  input: RenameOnlyOperationInput,
+  dependencies: BuildPersistedOperationDependencies,
+): Promise<BuildPersistedOperationResult> {
+  if (
+    input.renames.length === 0 ||
+    input.renames.some((rename) => rename.targetPath !== input.targetPath)
+  ) {
+    return { kind: "no-op" };
+  }
+  const linkSources = [...input.sources]
+    .sort((left, right) =>
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+    )
+    .map((source) => {
+      const linkPlan = planRenameScopedLinkChanges({
+        sourcePath: source.path,
+        markdown: source.text,
+        renames: input.renames,
+        resolveTarget: input.resolveTarget,
+      });
+      return {
+        path: source.path,
+        beforeText: source.text,
+        edits: linkPlan.edits.map((edit) => ({
+          range: edit.range,
+          expectedText: source.text.slice(edit.range.from, edit.range.to),
+          replacementText: edit.replacement,
+        })),
+      };
+    });
+  return buildLinkOnlyOperation({ linkSources }, dependencies);
 }
 
 export async function buildWorkflowPreview(

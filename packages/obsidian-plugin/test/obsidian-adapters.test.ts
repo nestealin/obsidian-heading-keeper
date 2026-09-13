@@ -21,6 +21,57 @@ import {
 beforeEach(() => (state.modified.length = 0));
 
 describe("Obsidian adapters", () => {
+  it("uses the single open editor as the writer and never calls Vault.process", async () => {
+    const file = new TFile("A.md");
+    const disk = new Map([["A.md", "disk is stale"]]);
+    let editorText = "text:A.md";
+    const editorWrites: string[] = [];
+    const adapter = new ObsidianVaultFileAdapter(
+      {
+        getAbstractFileByPath: () => file,
+        read: async () => disk.get("A.md")!,
+        process: async (_file, update) => {
+          const text = update(disk.get("A.md")!);
+          disk.set("A.md", text);
+          state.modified.push(["A.md", text]);
+          return text;
+        },
+      },
+      {
+        read: () => ({ kind: "ready", text: editorText }),
+        compareAndUpdate: async (_path, _expected, _result, edits) => {
+          editorText =
+            edits[0]?.replacementText === "changed"
+              ? "changed:A.md"
+              : editorText;
+          editorWrites.push(editorText);
+          disk.set("A.md", editorText);
+          return { kind: "updated" };
+        },
+      },
+    );
+    const hashText = async (text: string) => `hash:${text}`;
+
+    await expect(adapter.read("A.md")).resolves.toBe("text:A.md");
+    await expect(
+      adapter.compareAndUpdate(
+        "A.md",
+        "hash:text:A.md",
+        "hash:changed:A.md",
+        [
+          {
+            range: { from: 0, to: 4 },
+            expectedText: "text",
+            replacementText: "changed",
+          },
+        ],
+        hashText,
+      ),
+    ).resolves.toEqual({ kind: "updated" });
+    expect(editorWrites).toEqual(["changed:A.md"]);
+    expect(state.modified).toEqual([]);
+  });
+
   it("atomically compares and updates existing TFiles without creating missing files", async () => {
     const files = new Map([["A.md", new TFile("A.md")]]);
     const content = new Map([["A.md", "text:A.md"]]);
