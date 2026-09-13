@@ -66,7 +66,6 @@ describe("persisted editor maintenance", () => {
       cancel: async () => actions.push("cancel"),
       current: () => snapshot({ composing: true, compositionStarted: true }),
       dispatch: () => actions.push("dispatch"),
-      save: async () => actions.push("save"),
       settings: () => ({
         ...DEFAULT_STORED_SETTINGS,
         topLevel: 3,
@@ -118,7 +117,6 @@ describe("persisted editor maintenance", () => {
       cancel: async (id) => actions.push(`cancel:${id}`),
       current: () => current,
       dispatch: () => actions.push("dispatch"),
-      save: async () => actions.push("save"),
       settings: () => ({
         ...DEFAULT_STORED_SETTINGS,
         topLevel: 3,
@@ -156,7 +154,6 @@ describe("persisted editor maintenance", () => {
       cancel: async (id) => actions.push(`cancel:${id}`),
       current: () => snapshot(),
       dispatch: () => actions.push("dispatch"),
-      save: async () => actions.push("save"),
       settings: () => settings,
       stage: async () => {
         actions.push("stage");
@@ -213,7 +210,7 @@ describe("persisted editor maintenance", () => {
     );
   });
 
-  it("dispatches one editor transaction and saves only after the intent is durable", async () => {
+  it("dispatches one editor transaction without taking over Obsidian saving", async () => {
     const actions: string[] = [];
     const current = snapshot();
 
@@ -221,7 +218,6 @@ describe("persisted editor maintenance", () => {
       cancel: async (id) => actions.push(`cancel:${id}`),
       current: () => current,
       dispatch: (edits) => actions.push(`dispatch:${edits.length}`),
-      save: async () => actions.push("save"),
       settings: () => ({
         ...DEFAULT_STORED_SETTINGS,
         topLevel: 3,
@@ -235,6 +231,6 @@ describe("persisted editor maintenance", () => {
     });
 
     expect(result).toBe("applied");
-    expect(actions).toEqual(["stage", "dispatch:2", "save"]);
+    expect(actions).toEqual(["stage", "dispatch:2"]);
   });
 });

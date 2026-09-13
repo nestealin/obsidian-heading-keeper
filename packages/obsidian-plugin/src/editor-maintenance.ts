@@ -25,7 +25,6 @@ export interface EditorMaintenanceDependencies {
   readonly stage: (materialization: EditorMaterialization) => Promise<string>;
   readonly cancel: (intentId: string) => Promise<unknown>;
   readonly dispatch: (edits: readonly PlannedTextEdit[]) => unknown;
-  readonly save: () => Promise<unknown>;
 }
 
 export function planEditorMaterialization(
@@ -79,7 +78,6 @@ export async function runEditorMaintenanceOnce(
   }
 
   dependencies.dispatch(materialization.edits);
-  await dependencies.save();
   return "applied";
 }
 

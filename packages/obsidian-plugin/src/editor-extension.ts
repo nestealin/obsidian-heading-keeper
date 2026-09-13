@@ -272,11 +272,6 @@ export function createHeadingKeeperExtension(
             stage: maintenance.stage,
             cancel: maintenance.cancel,
             dispatch: (edits) => this.dispatch(edits),
-            save: async () => {
-              const save = editorSave(this.view);
-              if (!save) throw new Error("editor-save-unavailable");
-              await save();
-            },
           });
           if (result === "deferred" && isComposing(this.view)) this.schedule();
         } catch {
@@ -293,10 +288,7 @@ export function createHeadingKeeperExtension(
           generation: this.generation,
           composing: this.view.composing,
           compositionStarted: this.view.compositionStarted,
-          unique:
-            path !== null &&
-            editorViewsByPath.get(path)?.size === 1 &&
-            editorSave(this.view) !== null,
+          unique: path !== null && editorViewsByPath.get(path)?.size === 1,
         };
       }
 
