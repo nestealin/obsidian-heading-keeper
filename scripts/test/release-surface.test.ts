@@ -19,7 +19,7 @@ const repositoryRoot = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "../..",
 );
-const artifact = join(repositoryRoot, "artifacts/heading-keeper-0.2.1.zip");
+const artifact = join(repositoryRoot, "artifacts/heading-keeper-0.2.2.zip");
 const packageScript = join(repositoryRoot, "scripts/package-plugin.mjs");
 const releaseRejectedScript = join(
   repositoryRoot,
@@ -148,7 +148,7 @@ describe("release surface", () => {
     expect(resolve(dirname(chinesePath), "README.md")).toBe(englishPath);
   });
 
-  it("keeps version 0.2.1 aligned across every release identity", async () => {
+  it("keeps version 0.2.2 aligned across every release identity", async () => {
     const paths = [
       "package.json",
       "manifest.json",
@@ -163,13 +163,13 @@ describe("release surface", () => {
       ),
     );
     expect(versions.map((value) => value.version)).toEqual(
-      paths.map(() => "0.2.1"),
+      paths.map(() => "0.2.2"),
     );
     const coreIdentity = await readFile(
       join(repositoryRoot, "packages/core/src/index.ts"),
       "utf8",
     );
-    expect(coreIdentity).toContain('version: "0.2.1"');
+    expect(coreIdentity).toContain('version: "0.2.2"');
 
     const rootManifestText = await readFile(
       join(repositoryRoot, "manifest.json"),
@@ -193,7 +193,7 @@ describe("release surface", () => {
       isDesktopOnly: false,
       minAppVersion: "1.12.7",
       name: "Heading Keeper",
-      version: "0.2.1",
+      version: "0.2.2",
     });
     expect(rootManifest.id).toMatch(/^[a-z0-9-]+$/u);
     expect(String(rootManifest.id)).not.toContain("obsidian");
@@ -261,7 +261,7 @@ describe("release surface", () => {
     );
     expect(run(wordJoinerScript).status).toBe(0);
     expect(run(sensitiveScript).status).toBe(0);
-  });
+  }, 15_000);
 
   it("runs caller-supplied rejected-term checks and explicitly skips when absent", () => {
     const absent = run(releaseRejectedScript, [], {

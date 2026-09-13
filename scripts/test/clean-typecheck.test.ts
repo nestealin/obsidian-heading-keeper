@@ -68,7 +68,7 @@ describe("clean workspace gate", () => {
   }, 30_000);
 
   it("packages the release without pre-existing package dist outputs", async () => {
-    const checkout = await copyTrackedCheckout();
+    const checkout = await copyCandidateCheckout();
     const install = spawnSync(
       "corepack",
       ["pnpm", "install", "--offline", "--frozen-lockfile"],
