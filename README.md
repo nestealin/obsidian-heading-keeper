@@ -37,9 +37,10 @@ view and performs no Vault writes.
 ### Persisted mode
 
 Persisted mode requires an explicit one-time opt-in. Heading Keeper then
-maintains the currently opened Markdown note after Obsidian saves it. Routine
-maintenance is silent and does not require a preview, a manual save, or another
-confirmation.
+maintains the currently opened Markdown note through its editor buffer. It
+defers all numbering while an IME composition is active, then applies one
+minimal editor transaction after the input settles. Routine maintenance is
+silent and does not require a preview, a manual save, or another confirmation.
 
 Numbering is not applied to unopened notes in the background. A note is
 reconciled when it is opened. Disable other plugins that write heading numbers
@@ -113,7 +114,7 @@ then be enabled explicitly in the plugin settings.
 - Desktop behavior is verified for virtual rendering, persisted maintenance,
   restart recovery, and heading-link synchronization.
 - The plugin uses mobile-compatible Obsidian APIs and declares mobile support;
-  real-device mobile validation is still in progress for version `0.2.1`.
+  real-device mobile validation is still in progress for version `0.2.2`.
 
 ## Development
 

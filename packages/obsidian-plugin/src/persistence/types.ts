@@ -52,6 +52,7 @@ export interface OperationSummary {
 
 export interface VaultFileAdapter {
   read(path: string): Promise<string>;
+  isTransientError?(error: unknown): boolean;
   compareAndUpdate(
     path: string,
     expectedHash: string,
@@ -64,7 +65,8 @@ export interface VaultFileAdapter {
 export type CompareAndUpdateResult =
   | { readonly kind: "updated" }
   | { readonly kind: "already-applied" }
-  | { readonly kind: "stale" };
+  | { readonly kind: "stale" }
+  | { readonly kind: "busy" };
 
 export interface JournalStore {
   load(id: string): Promise<PersistedOperation | null>;
@@ -132,6 +134,10 @@ export type ExecutionResult =
   | {
       readonly kind: "journal-error";
       readonly code: "journal-error";
+      readonly operation: PersistedOperation;
+    }
+  | {
+      readonly kind: "busy";
       readonly operation: PersistedOperation;
     };
 

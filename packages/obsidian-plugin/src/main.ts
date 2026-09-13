@@ -49,6 +49,7 @@ import { validatePersistedOperation } from "./persistence/operation-validator.js
 import { sha256Text } from "./persistence/plan-service.js";
 import {
   createHeadingKeeperExtension,
+  openEditorFileSurface,
   refreshHeadingKeeperExtensions,
 } from "./editor-extension.js";
 import {
@@ -334,7 +335,10 @@ export class HeadingKeeperPlugin extends Plugin {
 
   async onload(): Promise<void> {
     await this.loadSettings();
-    this.vaultAdapter = new ObsidianVaultFileAdapter(this.app.vault);
+    this.vaultAdapter = new ObsidianVaultFileAdapter(
+      this.app.vault,
+      openEditorFileSurface,
+    );
     this.metadataLinkIndex = new ObsidianMetadataLinkIndex(
       this.app.vault,
       this.app.metadataCache,
@@ -354,6 +358,7 @@ export class HeadingKeeperPlugin extends Plugin {
         hashText: (text) => sha256Text(text, activeWindow.crypto),
       },
       journal: this.dataStore!.journal,
+      renameIntents: this.dataStore!.renameIntents,
       execute: (operation) => this.executeAutomaticMaintenance(operation),
       now: () => Date.now(),
       setTimer: (callback, delayMs) =>
@@ -367,10 +372,39 @@ export class HeadingKeeperPlugin extends Plugin {
             : "notices.applyRecovery",
         );
       },
+      onStorageError: () => {
+        if (!this.disposed) this.showNotice("notices.storageError");
+      },
     });
     this.addSettingTab(new HeadingKeeperSettingTab(this.app, this));
     this.registerEditorExtension(
-      createHeadingKeeperExtension(() => this.settings),
+      createHeadingKeeperExtension(() => this.settings, {
+        stage: async (materialization) => {
+          if (this.disposed || !this.dataStore) {
+            throw new Error("plugin-unavailable");
+          }
+          const targetPath = materialization.renames[0]?.targetPath;
+          if (
+            !targetPath ||
+            materialization.renames.some(
+              (rename) => rename.targetPath !== targetPath,
+            )
+          ) {
+            throw new Error("rename-intent-invalid");
+          }
+          const id = createOperationId();
+          await this.dataStore.renameIntents.stage({
+            id,
+            createdAt: new Date().toISOString(),
+            targetPath,
+            renames: materialization.renames,
+          });
+          return id;
+        },
+        cancel: async (intentId) => {
+          await this.dataStore?.renameIntents.remove([intentId]);
+        },
+      }),
     );
     this.registerMarkdownPostProcessor(async (root, context) => {
       const token = {};
@@ -461,7 +495,7 @@ export class HeadingKeeperPlugin extends Plugin {
     this.registerEvent(
       this.app.metadataCache.on(
         "changed",
-        (file: TFile, _data: string, cache: CachedMetadata) => {
+        async (file: TFile, _data: string, cache: CachedMetadata) => {
           const before = this.metadataHeadings.get(file.path) ?? [];
           const after = (cache.headings ?? []).map(
             (heading) => heading.heading,
@@ -472,7 +506,7 @@ export class HeadingKeeperPlugin extends Plugin {
             this.settings.mode === "persisted" &&
             this.app.workspace.getActiveFile()?.path === file.path
           ) {
-            this.automaticMaintenance?.acceptMetadataChange(
+            await this.automaticMaintenance?.acceptMetadataChange(
               file.path,
               before,
               after,

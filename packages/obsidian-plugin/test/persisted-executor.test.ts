@@ -101,6 +101,54 @@ function harness(initial: Record<string, string>) {
 }
 
 describe("executePersistedOperation", () => {
+  it("defers without journaling when an open editor is transiently busy during preflight", async () => {
+    const state = harness({
+      "Target.md": "before target",
+      "a.md": "before a",
+      "z.md": "before z",
+    });
+    state.vault.read = async () => {
+      throw new Error("editor-busy");
+    };
+    state.vault.isTransientError = () => true;
+
+    const result = await executePersistedOperation(operation(), {
+      vault: state.vault,
+      journal: state.journal,
+      hashText,
+    });
+
+    expect(result).toMatchObject({ kind: "busy", operation: { id: "op-1" } });
+    expect(state.events.some((event) => event.startsWith("save:"))).toBe(false);
+    expect(state.events.some((event) => event.startsWith("write:"))).toBe(
+      false,
+    );
+  });
+
+  it("removes the untouched applying journal when an editor becomes busy before its first write", async () => {
+    const state = harness({
+      "Target.md": "before target",
+      "a.md": "before a",
+      "z.md": "before z",
+    });
+    state.vault.compareAndUpdate = async () => ({ kind: "busy" });
+    state.journal.remove = async (id) => {
+      state.events.push(`remove:${id}`);
+    };
+
+    const result = await executePersistedOperation(operation(), {
+      vault: state.vault,
+      journal: state.journal,
+      hashText,
+    });
+
+    expect(result).toMatchObject({ kind: "busy", operation: { id: "op-1" } });
+    expect(state.events).toContain("remove:op-1");
+    expect(state.events.some((event) => event.startsWith("write:"))).toBe(
+      false,
+    );
+  });
+
   it("preflights every source, durably journals, and writes target then sorted links", async () => {
     const state = harness({
       "Target.md": "before target",

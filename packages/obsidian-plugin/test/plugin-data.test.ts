@@ -38,6 +38,48 @@ async function operation(
 }
 
 describe("PluginDataStore", () => {
+  it("persists text-minimal editor rename intents across reload and removes them after link sync", async () => {
+    const saves: unknown[] = [];
+    const intent = {
+      id: "intent-1",
+      createdAt: "2026-08-31T00:00:00.000Z",
+      targetPath: "Target.md",
+      renames: [
+        {
+          targetPath: "Target.md",
+          oldHeading: "Child",
+          newHeading: "1.1. Child",
+        },
+      ],
+    };
+    const first = new PluginDataStore(
+      async () => undefined,
+      async (value) => saves.push(value),
+      sha256Text,
+    );
+    await first.initialize();
+
+    await first.renameIntents.stage(intent);
+
+    expect(first.renameIntents.list("Target.md")).toEqual([intent]);
+    expect(saves.at(-1)).toMatchObject({
+      renameIntents: { "intent-1": intent },
+    });
+    expect(JSON.stringify(saves.at(-1))).not.toContain("private body marker");
+
+    const reloaded = new PluginDataStore(
+      async () => saves.at(-1),
+      async (value) => saves.push(value),
+      sha256Text,
+    );
+    await reloaded.initialize();
+    expect(reloaded.renameIntents.list("Target.md")).toEqual([intent]);
+
+    await reloaded.renameIntents.remove(["intent-1"]);
+    expect(reloaded.renameIntents.list("Target.md")).toEqual([]);
+    expect(saves.at(-1)).not.toHaveProperty("renameIntents");
+  });
+
   it("replaces completed journals with text-free summaries", async () => {
     const saves: unknown[] = [];
     const store = new PluginDataStore(

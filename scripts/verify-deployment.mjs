@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -48,12 +47,6 @@ try {
   }
   throw error;
 }
-
-execFileSync(
-  "corepack",
-  ["pnpm", "--filter", "@heading-keeper/obsidian-plugin", "build"],
-  { cwd: repositoryRoot, stdio: "inherit" },
-);
 
 const deployedNames = await readdir(deployed);
 for (const name of deployedNames) {

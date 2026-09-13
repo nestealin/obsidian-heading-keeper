@@ -134,13 +134,16 @@ export async function executePersistedOperation(
           operation: executable,
         };
       }
-    } catch {
-      if (preflightFailure === null)
-        preflightFailure = {
-          kind: "recovery-required",
-          code: "source-read-error",
-          operation: snapshotOperation(executable, "recovery-required"),
-        };
+    } catch (error) {
+      if (preflightFailure === null) {
+        preflightFailure = dependencies.vault.isTransientError?.(error)
+          ? { kind: "busy", operation: executable }
+          : {
+              kind: "recovery-required",
+              code: "source-read-error",
+              operation: snapshotOperation(executable, "recovery-required"),
+            };
+      }
     }
   }
   if (preflightFailure) return preflightFailure;
@@ -177,6 +180,21 @@ export async function executePersistedOperation(
     }
     if (updateResult.kind === "stale") {
       return recoveryResult(currentOperation, "source-stale", dependencies);
+    }
+    if (updateResult.kind === "busy") {
+      if (completedPaths.length === 0) {
+        try {
+          await dependencies.journal.remove(currentOperation.id);
+          return { kind: "busy", operation: executable };
+        } catch {
+          return {
+            kind: "journal-error",
+            code: "journal-error",
+            operation: currentOperation,
+          };
+        }
+      }
+      return recoveryResult(currentOperation, "editor-busy", dependencies);
     }
 
     completedPaths.push(file.path);

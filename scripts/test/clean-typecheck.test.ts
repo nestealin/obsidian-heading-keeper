@@ -19,20 +19,24 @@ afterAll(async () => {
   );
 });
 
-async function copyTrackedCheckout(): Promise<string> {
+async function copyCandidateCheckout(): Promise<string> {
   const checkout = await mkdtemp(
     join(tmpdir(), "heading-keeper-clean-typecheck-"),
   );
   temporaryDirectories.push(checkout);
 
-  const trackedPaths = execFileSync("git", ["ls-files", "-z"], {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-  })
+  const candidatePaths = execFileSync(
+    "git",
+    ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+    {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+    },
+  )
     .split("\0")
     .filter((path) => path.length > 0);
 
-  for (const path of trackedPaths) {
+  for (const path of candidatePaths) {
     const target = join(checkout, path);
     await mkdir(dirname(target), { recursive: true });
     await cp(join(repositoryRoot, path), target);
@@ -43,7 +47,7 @@ async function copyTrackedCheckout(): Promise<string> {
 
 describe("clean workspace gate", () => {
   it("typechecks without pre-existing package dist outputs", async () => {
-    const checkout = await copyTrackedCheckout();
+    const checkout = await copyCandidateCheckout();
     const install = spawnSync(
       "corepack",
       ["pnpm", "install", "--offline", "--frozen-lockfile"],
@@ -64,7 +68,7 @@ describe("clean workspace gate", () => {
   }, 30_000);
 
   it("packages the release without pre-existing package dist outputs", async () => {
-    const checkout = await copyTrackedCheckout();
+    const checkout = await copyCandidateCheckout();
     const install = spawnSync(
       "corepack",
       ["pnpm", "install", "--offline", "--frozen-lockfile"],

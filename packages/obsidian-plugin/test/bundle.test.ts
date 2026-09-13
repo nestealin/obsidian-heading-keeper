@@ -20,6 +20,11 @@ describe("production bundle surface", () => {
       TFile: class {},
     };
     const state = {
+      Annotation: {
+        define: () => ({
+          of: (value: unknown) => value,
+        }),
+      },
       StateEffect: {
         define: () => ({
           is: () => false,

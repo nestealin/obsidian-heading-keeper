@@ -34,15 +34,98 @@ function journalHarness() {
 }
 
 describe("AutomaticMaintenance", () => {
-  it("coalesces rapid saves and reads only reverse-index candidates", async () => {
+  it("durably stages a metadata rename before scheduling link synchronization", async () => {
     const content = new Map([
-      ["Target.md", "## Alpha"],
+      ["Target.md", "## Renamed"],
+      ["Links.md", "[[Target#Original]]"],
+    ]);
+    const intents: Array<{
+      id: string;
+      createdAt: string;
+      targetPath: string;
+      renames: Array<{
+        targetPath: string;
+        oldHeading: string;
+        newHeading: string;
+      }>;
+    }> = [];
+    const removed: string[][] = [];
+    const { journal } = journalHarness();
+    const maintenance = new AutomaticMaintenance({
+      settings: () => ({ ...DEFAULT_STORED_SETTINGS, mode: "persisted" }),
+      read: async (path) => content.get(path)!,
+      indexReady: () => true,
+      candidates: () => ["Links.md"],
+      resolveTarget: () => ({ kind: "file", path: "Target.md" }),
+      operationDependencies: {
+        createId: () => "metadata-intent",
+        now: () => "2026-08-31T00:00:00.000Z",
+        hashText: async (text) => `hash:${text}`,
+      },
+      journal,
+      renameIntents: {
+        list: () => intents,
+        stage: async (intent) => {
+          intents.push({ ...intent, renames: [...intent.renames] });
+        },
+        remove: async (ids) => {
+          removed.push([...ids]);
+        },
+      },
+      execute: async (operation) => {
+        for (const file of operation.files) {
+          content.set(
+            file.path,
+            applyCheckedEdits(content.get(file.path)!, file.edits),
+          );
+        }
+        return {
+          kind: "completed",
+          operation: {
+            ...operation,
+            state: "completed",
+            completedPaths: operation.files.map((file) => file.path),
+          },
+        };
+      },
+      now: () => Date.parse("2026-08-31T00:00:00.000Z"),
+    });
+
+    await maintenance.acceptMetadataChange(
+      "Target.md",
+      ["Original"],
+      ["Renamed"],
+    );
+    await maintenance.flush();
+
+    expect(intents).toEqual([
+      {
+        id: "metadata-intent",
+        createdAt: "2026-08-31T00:00:00.000Z",
+        targetPath: "Target.md",
+        renames: [
+          {
+            targetPath: "Target.md",
+            oldHeading: "Original",
+            newHeading: "Renamed",
+          },
+        ],
+      },
+    ]);
+    expect(content.get("Links.md")).toBe("[[Target#Renamed]]");
+    expect(removed).toEqual([["metadata-intent"]]);
+  });
+
+  it("coalesces saved editor intents into link-only reverse-index work", async () => {
+    const content = new Map([
+      ["Target.md", "## 1. Beta"],
       ["A.md", "[[Target#Beta]]"],
       ["B.md", "[Beta](Target.md#Beta)"],
       ["Never.md", "private unrelated body"],
     ]);
     const reads: string[] = [];
     const executed: PersistedOperation[] = [];
+    const removedIntents: string[][] = [];
     const { journal } = journalHarness();
     const maintenance = new AutomaticMaintenance({
       settings: () => ({
@@ -62,6 +145,25 @@ describe("AutomaticMaintenance", () => {
         hashText: async (text) => `hash:${text}`,
       },
       journal,
+      renameIntents: {
+        list: () => [
+          {
+            id: "intent-1",
+            createdAt: "2026-08-31T00:00:00.000Z",
+            targetPath: "Target.md",
+            renames: [
+              {
+                targetPath: "Target.md",
+                oldHeading: "Beta",
+                newHeading: "1. Beta",
+              },
+            ],
+          },
+        ],
+        remove: async (ids) => {
+          removedIntents.push([...ids]);
+        },
+      },
       execute: async (operation) => {
         executed.push(operation);
         for (const file of operation.files) {
@@ -83,21 +185,113 @@ describe("AutomaticMaintenance", () => {
     });
 
     maintenance.schedule("Target.md", "modify");
-    content.set("Target.md", "## Intermediate");
     maintenance.schedule("Target.md", "modify");
-    content.set("Target.md", "## Beta");
     maintenance.schedule("Target.md", "modify");
     await maintenance.flush();
 
     expect(executed).toHaveLength(1);
     expect(content.get("Target.md")).toBe("## 1. Beta");
+    expect(content.get("A.md")).toBe("[[Target#1. Beta]]");
+    expect(content.get("B.md")).toBe("[Beta](Target.md#1.%20Beta)");
+    expect(
+      executed[0]?.files.map(({ path, role }) => ({ path, role })),
+    ).toEqual([
+      { path: "A.md", role: "link-source" },
+      { path: "B.md", role: "link-source" },
+    ]);
     expect(reads).toEqual(["Target.md", "A.md", "B.md"]);
     expect(reads).not.toContain("Never.md");
+    expect(removedIntents).toEqual([["intent-1"]]);
+  });
+
+  it("resumes durable rename intents after restart without a new target event", async () => {
+    const content = new Map([
+      ["Target.md", "## 1. Beta"],
+      ["Links.md", "[[Target#Beta]]"],
+    ]);
+    const intents = [
+      {
+        id: "intent-restart",
+        createdAt: "2026-08-31T00:00:00.000Z",
+        targetPath: "Target.md",
+        renames: [
+          {
+            targetPath: "Target.md",
+            oldHeading: "Beta",
+            newHeading: "1. Beta",
+          },
+        ],
+      },
+    ];
+    const removed: string[][] = [];
+    const { journal } = journalHarness();
+    const maintenance = new AutomaticMaintenance({
+      settings: () => ({ ...DEFAULT_STORED_SETTINGS, mode: "persisted" }),
+      read: async (path) => content.get(path)!,
+      indexReady: () => true,
+      candidates: () => ["Links.md"],
+      resolveTarget: () => ({ kind: "file", path: "Target.md" }),
+      operationDependencies: {
+        createId: () => "resume-intent-operation",
+        now: () => "2026-08-31T00:00:01.000Z",
+        hashText: async (text) => `hash:${text}`,
+      },
+      journal,
+      renameIntents: {
+        list: (targetPath) =>
+          intents.filter(
+            (intent) =>
+              targetPath === undefined || intent.targetPath === targetPath,
+          ),
+        remove: async (ids) => {
+          removed.push([...ids]);
+        },
+      },
+      execute: async (operation) => {
+        for (const file of operation.files) {
+          content.set(
+            file.path,
+            applyCheckedEdits(content.get(file.path)!, file.edits),
+          );
+        }
+        return {
+          kind: "completed",
+          operation: {
+            ...operation,
+            state: "completed",
+            completedPaths: operation.files.map((file) => file.path),
+          },
+        };
+      },
+      now: () => Date.parse("2026-08-31T00:00:01.000Z"),
+    });
+
+    await maintenance.resume();
+
+    expect(content.get("Links.md")).toBe("[[Target#1. Beta]]");
+    expect(removed).toEqual([["intent-restart"]]);
   });
 
   it("persists retry state and resumes it after restart", async () => {
-    const content = new Map([["Target.md", "## Alpha"]]);
+    const content = new Map([
+      ["Target.md", "## 1. Alpha"],
+      ["Links.md", "[[Target#Alpha]]"],
+    ]);
     const state = journalHarness();
+    const intents = [
+      {
+        id: "intent-retry",
+        createdAt: "2026-08-31T00:00:00.000Z",
+        targetPath: "Target.md",
+        renames: [
+          {
+            targetPath: "Target.md",
+            oldHeading: "Alpha",
+            newHeading: "1. Alpha",
+          },
+        ],
+      },
+    ];
     let executions = 0;
     const dependencies = {
       settings: () => ({
@@ -106,7 +300,7 @@ describe("AutomaticMaintenance", () => {
       }),
       read: async (path: string) => content.get(path)!,
       indexReady: () => true,
-      candidates: () => [],
+      candidates: () => ["Links.md"],
       resolveTarget: () => ({ kind: "file" as const, path: "Target.md" }),
       operationDependencies: {
         createId: () => "retry-1",
@@ -114,22 +308,42 @@ describe("AutomaticMaintenance", () => {
         hashText: async (text: string) => `hash:${text}`,
       },
       journal: state.journal,
+      renameIntents: {
+        list: (targetPath?: string) =>
+          intents.filter(
+            (intent) =>
+              targetPath === undefined || intent.targetPath === targetPath,
+          ),
+        remove: async (ids: readonly string[]) => {
+          for (const id of ids) {
+            const index = intents.findIndex((intent) => intent.id === id);
+            if (index >= 0) intents.splice(index, 1);
+          }
+        },
+      },
       execute: async (operation: PersistedOperation) => {
         executions += 1;
-        return executions === 1
-          ? {
-              kind: "recovery-required" as const,
-              code: "write-error",
-              operation: { ...operation, state: "recovery-required" as const },
-            }
-          : {
-              kind: "completed" as const,
-              operation: {
-                ...operation,
-                state: "completed" as const,
-                completedPaths: operation.files.map((file) => file.path),
-              },
-            };
+        if (executions === 1) {
+          return {
+            kind: "recovery-required" as const,
+            code: "write-error",
+            operation: { ...operation, state: "recovery-required" as const },
+          };
+        }
+        for (const file of operation.files) {
+          content.set(
+            file.path,
+            applyCheckedEdits(content.get(file.path)!, file.edits),
+          );
+        }
+        return {
+          kind: "completed" as const,
+          operation: {
+            ...operation,
+            state: "completed" as const,
+            completedPaths: operation.files.map((file) => file.path),
+          },
+        };
       },
     };
     const first = new AutomaticMaintenance({
@@ -153,5 +367,6 @@ describe("AutomaticMaintenance", () => {
 
     expect(executions).toBe(2);
     expect(state.pending.size).toBe(0);
+    expect(intents).toEqual([]);
   });
 });

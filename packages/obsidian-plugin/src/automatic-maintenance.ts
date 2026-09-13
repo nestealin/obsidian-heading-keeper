@@ -1,6 +1,11 @@
-import { buildNumberingPlan, scanHeadings } from "@heading-keeper/core";
-import type { HeadingRename, ResolvedTarget } from "@heading-keeper/link-core";
-import { buildWorkflowPreview } from "./persisted-workflow.js";
+import { scanHeadings } from "@heading-keeper/core";
+import {
+  normalizeHeadingFragment,
+  type HeadingRename,
+  type ResolvedTarget,
+} from "@heading-keeper/link-core";
+import { buildRenameOnlyOperation } from "./persisted-workflow.js";
+import type { HeadingRenameIntent } from "./plugin-data.js";
 import { snapshotOperation } from "./persistence/journal.js";
 import type {
   BuildPersistedOperationDependencies,
@@ -30,6 +35,11 @@ export interface AutomaticMaintenanceDependencies {
   ) => ResolvedTarget;
   readonly operationDependencies: BuildPersistedOperationDependencies;
   readonly journal: JournalStore;
+  readonly renameIntents?: {
+    readonly list: (targetPath?: string) => readonly HeadingRenameIntent[];
+    readonly stage?: (intent: HeadingRenameIntent) => Promise<void>;
+    readonly remove: (ids: readonly string[]) => Promise<void>;
+  };
   readonly execute: (
     operation: PersistedOperation,
   ) => Promise<AutomaticExecutionResult>;
@@ -38,6 +48,7 @@ export interface AutomaticMaintenanceDependencies {
   readonly setTimer?: (callback: () => void, delayMs: number) => unknown;
   readonly clearTimer?: (handle: unknown) => void;
   readonly onConflict?: (operation: PersistedOperation, code: string) => void;
+  readonly onStorageError?: (code: string) => void;
 }
 
 const MAX_RETRY_DELAY_MS = 5 * 60 * 1_000;
@@ -66,13 +77,42 @@ export class AutomaticMaintenance {
     this.pathTimers.set(path, timer);
   }
 
-  acceptMetadataChange(
+  async acceptMetadataChange(
     path: string,
     before: readonly string[],
     after: readonly string[],
-  ): void {
+  ): Promise<void> {
     const rename = uniqueHeadingRename(path, before, after);
     if (!rename) return;
+    const stored = this.dependencies.renameIntents;
+    if (
+      stored
+        ?.list(path)
+        .some((intent) =>
+          intent.renames.some(
+            (candidate) =>
+              candidate.oldHeading === rename.oldHeading &&
+              candidate.newHeading === rename.newHeading,
+          ),
+        )
+    ) {
+      this.schedule(path, "metadata");
+      return;
+    }
+    if (stored?.stage) {
+      try {
+        await stored.stage({
+          id: this.dependencies.operationDependencies.createId(),
+          createdAt: this.dependencies.operationDependencies.now(),
+          targetPath: path,
+          renames: [rename],
+        });
+        this.schedule(path, "metadata");
+        return;
+      } catch {
+        this.dependencies.onStorageError?.("rename-intent-storage");
+      }
+    }
     this.additionalRenames.set(path, [rename]);
     this.schedule(path, "metadata");
   }
@@ -102,6 +142,14 @@ export class AutomaticMaintenance {
         await this.enqueueOperation(operation);
       }
     }
+    const intentPaths = [
+      ...new Set(
+        (this.dependencies.renameIntents?.list() ?? []).map(
+          (intent) => intent.targetPath,
+        ),
+      ),
+    ].sort(compareCodeUnits);
+    for (const path of intentPaths) await this.enqueuePath(path);
     await this.tail;
   }
 
@@ -124,7 +172,9 @@ export class AutomaticMaintenance {
 
   private enqueueOperation(operation: PersistedOperation): Promise<void> {
     if (this.disposed) return Promise.resolve();
-    this.tail = this.tail.then(() => this.execute(operation));
+    this.tail = this.tail.then(async () => {
+      await this.execute(operation);
+    });
     return this.tail;
   }
 
@@ -140,17 +190,14 @@ export class AutomaticMaintenance {
       this.schedule(path, "modify");
       return;
     }
-    const numberingPlan = buildNumberingPlan(
-      scanHeadings(targetText),
-      settings,
-    );
-    const extra = this.additionalRenames.get(path) ?? [];
-    const oldFragments = [
-      ...numberingPlan.entries.flatMap((entry) =>
-        entry.edit ? [entry.heading.rawText.trim()] : [],
-      ),
-      ...extra.map((rename) => rename.oldHeading),
+    const intents = this.dependencies.renameIntents?.list(path) ?? [];
+    const realized = realizedRenameIntents(targetText, intents);
+    const extra = [
+      ...(this.additionalRenames.get(path) ?? []),
+      ...(realized?.renames ?? []),
     ];
+    if (extra.length === 0) return;
+    const oldFragments = extra.map((rename) => rename.oldHeading);
     if (
       settings.updateHeadingLinks &&
       oldFragments.length > 0 &&
@@ -180,14 +227,12 @@ export class AutomaticMaintenance {
 
     let preview;
     try {
-      preview = await buildWorkflowPreview(
+      preview = await buildRenameOnlyOperation(
         {
-          kind: "add",
           targetPath: path,
           sources,
-          settings,
           resolveTarget: this.dependencies.resolveTarget,
-          additionalRenames: extra,
+          renames: extra,
         },
         this.dependencies.operationDependencies,
       );
@@ -196,42 +241,58 @@ export class AutomaticMaintenance {
       return;
     }
     this.additionalRenames.delete(path);
-    if (preview.kind === "no-op") return;
-    await this.execute(preview.operation);
+    if (preview.kind === "no-op") {
+      if (realized && realized.intentIds.length > 0) {
+        await this.dependencies.renameIntents?.remove(realized.intentIds);
+      }
+      return;
+    }
+    const outcome = await this.execute(preview.operation, path);
+    if (outcome === "completed" && realized && realized.intentIds.length > 0) {
+      await this.dependencies.renameIntents?.remove(realized.intentIds);
+    }
   }
 
-  private async execute(operation: PersistedOperation): Promise<void> {
-    if (this.disposed) return;
+  private async execute(
+    operation: PersistedOperation,
+    retryPath?: string,
+  ): Promise<"completed" | "conflict" | "deferred"> {
+    if (this.disposed) return "deferred";
     let result: AutomaticExecutionResult;
     try {
       result = await this.dependencies.execute(operation);
     } catch {
       await this.retry(operation, "execute-error");
-      return;
+      return "deferred";
     }
     if (result.kind === "completed") {
       const timer = this.retryTimers.get(operation.id);
       if (timer !== undefined) this.clearTimer(timer);
       this.retryTimers.delete(operation.id);
       await this.dependencies.journal.complete(result.operation);
-      return;
+      return "completed";
     }
     if (result.kind === "stale-plan") {
       this.dependencies.onConflict?.(result.operation, result.code);
-      return;
+      return "conflict";
     }
     if (result.kind === "recovery-required") {
       if (isStructuralConflict(result.code)) {
         this.dependencies.onConflict?.(result.operation, result.code);
-        return;
+        return "conflict";
       }
       await this.retry(result.operation, result.code);
-      return;
+      return "deferred";
+    }
+    if (result.kind === "busy" && retryPath !== undefined) {
+      this.schedule(retryPath, "modify");
+      return "deferred";
     }
     await this.retry(
       result.kind === "journal-error" ? result.operation : operation,
       result.kind === "journal-error" ? result.code : "busy",
     );
+    return "deferred";
   }
 
   private async retry(
@@ -313,4 +374,76 @@ function isStructuralConflict(code: string): boolean {
 
 function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+export function realizedRenameIntents(
+  markdown: string,
+  intents: readonly HeadingRenameIntent[],
+): {
+  readonly intentIds: readonly string[];
+  readonly renames: readonly HeadingRename[];
+} | null {
+  if (intents.length === 0) return null;
+  const renames = collapseRenames(intents.flatMap((intent) => intent.renames));
+  if (renames.length === 0) return null;
+  const counts = new Map<string, number>();
+  for (const heading of scanHeadings(markdown)) {
+    const normalized = normalizeHeadingFragment(heading.rawText.trim());
+    if (normalized.ok) {
+      counts.set(normalized.value, (counts.get(normalized.value) ?? 0) + 1);
+    }
+  }
+  for (const rename of renames) {
+    const oldHeading = normalizeHeadingFragment(rename.oldHeading);
+    const newHeading = normalizeHeadingFragment(rename.newHeading);
+    if (
+      !oldHeading.ok ||
+      !newHeading.ok ||
+      (counts.get(oldHeading.value) ?? 0) !== 0 ||
+      (counts.get(newHeading.value) ?? 0) !== 1
+    ) {
+      return null;
+    }
+  }
+  return {
+    intentIds: intents.map((intent) => intent.id),
+    renames,
+  };
+}
+
+function collapseRenames(renames: readonly HeadingRename[]): HeadingRename[] {
+  const collapsed: HeadingRename[] = [];
+  for (const rename of renames) {
+    const oldHeading = normalizeHeadingFragment(rename.oldHeading);
+    if (!oldHeading.ok) continue;
+    const previous = collapsed.find((candidate) => {
+      const current = normalizeHeadingFragment(candidate.newHeading);
+      return (
+        candidate.targetPath === rename.targetPath &&
+        current.ok &&
+        current.value === oldHeading.value
+      );
+    });
+    if (previous) {
+      previous.newHeading = rename.newHeading;
+      continue;
+    }
+    const sameOrigin = collapsed.find((candidate) => {
+      const origin = normalizeHeadingFragment(candidate.oldHeading);
+      return (
+        candidate.targetPath === rename.targetPath &&
+        origin.ok &&
+        origin.value === oldHeading.value
+      );
+    });
+    if (sameOrigin) sameOrigin.newHeading = rename.newHeading;
+    else collapsed.push({ ...rename });
+  }
+  return collapsed.filter((rename) => {
+    const oldHeading = normalizeHeadingFragment(rename.oldHeading);
+    const newHeading = normalizeHeadingFragment(rename.newHeading);
+    return (
+      !oldHeading.ok || !newHeading.ok || oldHeading.value !== newHeading.value
+    );
+  });
 }
