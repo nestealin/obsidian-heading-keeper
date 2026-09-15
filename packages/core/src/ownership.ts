@@ -45,6 +45,10 @@ function capturedSemanticForm(
     : false;
 }
 
+function isServiceOrPortNumericForm(text: string): boolean {
+  return /^\d{1,5}(?:\.|:)?\s*(?:port|service|端口)(?:\s|$)/iu.test(text);
+}
+
 function isSemanticNumericForm(text: string, titleSeparator: string): boolean {
   if (
     capturedSemanticForm(
@@ -70,7 +74,7 @@ function isSemanticNumericForm(text: string, titleSeparator: string): boolean {
   if (capturedSemanticForm(text, /^((?:19|20)\d{2})/u, titleSeparator)) {
     return true;
   }
-  if (/^\d{1,5}(?:\.|:)?\s*(?:port|service|端口)(?:\s|$)/iu.test(text)) {
+  if (isServiceOrPortNumericForm(text)) {
     return true;
   }
   return false;
@@ -122,12 +126,17 @@ export function analyzeHeadingPrefix(
 ): HeadingPrefixAnalysis {
   const leadingLength = node.rawText.length - node.rawText.trimStart().length;
   const text = node.rawText.trimStart();
+  const managedPrefix = formattedNumericPrefix(text, format);
+  const exactServiceOrPortPrefix =
+    managedPrefix === expectedPrefix && isServiceOrPortNumericForm(text);
 
-  if (isSemanticNumericForm(text, format.titleSeparator)) {
+  if (
+    isSemanticNumericForm(text, format.titleSeparator) &&
+    !exactServiceOrPortPrefix
+  ) {
     return { ownership: "semantic", logicalTitle: text, managedRange: null };
   }
 
-  const managedPrefix = formattedNumericPrefix(text, format);
   if (managedPrefix !== null) {
     const managedRange = {
       from: node.contentRange.from + leadingLength,
