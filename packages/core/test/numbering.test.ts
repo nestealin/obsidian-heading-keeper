@@ -127,6 +127,22 @@ describe("buildNumberingPlan", () => {
     );
   });
 
+  it("does not duplicate an exact prefix before a Service title", () => {
+    const markdown = "## 查询方式\n### 1. Service 和后端\n";
+    const plan = buildNumberingPlan(scanHeadings(markdown), {
+      ...DEFAULT_SETTINGS,
+      topLevel: 3,
+      bottomLevel: 5,
+    });
+
+    expect(plan.entries[1]).toMatchObject({
+      displayPrefix: "1",
+      ownership: "exact",
+      action: "preserve",
+    });
+    expect(applyPlan(markdown, plan)).toBe(markdown);
+  });
+
   it("skip resumes after a valid parent and emits a stable diagnostic", () => {
     const headings = scanHeadings(
       "## Root\n#### Missing parent\n### Parent\n#### Recovered\n",

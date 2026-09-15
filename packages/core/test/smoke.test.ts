@@ -5,7 +5,7 @@ describe("packageIdentity", () => {
   it("exposes the stable plugin identity", () => {
     expect(packageIdentity).toEqual({
       id: "heading-keeper",
-      version: "0.2.2",
+      version: "0.2.3",
     });
   });
 });
