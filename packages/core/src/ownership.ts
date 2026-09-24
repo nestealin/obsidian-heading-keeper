@@ -163,13 +163,14 @@ export function analyzeHeadingPrefix(
 
   const standardNumericChain = /^\d+(?:\.\d+)+/u.exec(text)?.[0];
   if (standardNumericChain) {
-    return hasSemanticBoundary(
-      text,
-      standardNumericChain,
-      format.titleSeparator,
-    )
-      ? { ownership: "semantic", logicalTitle: text, managedRange: null }
-      : { ownership: "ambiguous", logicalTitle: text, managedRange: null };
+    const matchesUnownedHeadingDepth =
+      format.numberSeparator === "." &&
+      standardNumericChain.split(".").length ===
+        expectedPrefix.split(".").length;
+    return matchesUnownedHeadingDepth ||
+      !hasSemanticBoundary(text, standardNumericChain, format.titleSeparator)
+      ? { ownership: "ambiguous", logicalTitle: text, managedRange: null }
+      : { ownership: "semantic", logicalTitle: text, managedRange: null };
   }
 
   if (/^\d+(?:\s|$)/u.test(text)) {

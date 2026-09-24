@@ -186,4 +186,38 @@ describe("numbering properties", () => {
     });
     expect(applyPlan(markdown, plan)).toBe(markdown);
   });
+
+  it("never inserts before an unowned multi-segment numeric heading", () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.integer({ min: 0, max: 20 }), {
+          minLength: 2,
+          maxLength: 2,
+        }),
+        fc.constantFrom("锁定运行态目标", "radians", "Unicode 标题"),
+        fc.constantFrom("\n", "\r\n"),
+        (segments, title, newline) => {
+          const numericChain = segments.join(".");
+          const markdown = [
+            "## Parent",
+            "### 1. Section",
+            `#### ${numericChain} ${title}`,
+            "正文与 [[#标题]] 不变。",
+            "",
+          ].join(newline);
+          const plan = buildNumberingPlan(scanHeadings(markdown), {
+            ...DEFAULT_SETTINGS,
+            topLevel: 3,
+          });
+
+          expect(plan.entries[2]).toMatchObject({
+            ownership: "ambiguous",
+            action: "preserve",
+          });
+          expect(applyPlan(markdown, plan)).toBe(markdown);
+        },
+      ),
+      { numRuns: 1000 },
+    );
+  });
 });

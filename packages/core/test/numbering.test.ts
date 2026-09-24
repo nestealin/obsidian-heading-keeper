@@ -143,6 +143,33 @@ describe("buildNumberingPlan", () => {
     expect(applyPlan(markdown, plan)).toBe(markdown);
   });
 
+  it("preserves noncanonical numeric headings without swallowing source text", () => {
+    const markdown = [
+      "## 根因分析",
+      "### 1. 初步假设",
+      "### 2. 验证过程",
+      "#### 2.1 锁定运行态目标",
+      "#### 2.2 识别指数退避重传",
+      "#### 3.14 radians",
+      "正文中的 2.1、[[#2.1 锁定运行态目标]] 和 Unicode 保持原样。",
+      "",
+    ].join("\r\n");
+    const plan = buildNumberingPlan(scanHeadings(markdown), {
+      ...DEFAULT_SETTINGS,
+      topLevel: 3,
+      bottomLevel: 5,
+    });
+
+    expect(
+      plan.entries.slice(3).map((entry) => [entry.ownership, entry.action]),
+    ).toEqual([
+      ["ambiguous", "preserve"],
+      ["ambiguous", "preserve"],
+      ["ambiguous", "preserve"],
+    ]);
+    expect(applyPlan(markdown, plan)).toBe(markdown);
+  });
+
   it("skip resumes after a valid parent and emits a stable diagnostic", () => {
     const headings = scanHeadings(
       "## Root\n#### Missing parent\n### Parent\n#### Recovered\n",

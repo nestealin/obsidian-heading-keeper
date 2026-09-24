@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_STORED_SETTINGS } from "../src/settings.js";
-import { AutomaticMaintenance } from "../src/automatic-maintenance.js";
+import {
+  AutomaticMaintenance,
+  realizedRenameIntents,
+} from "../src/automatic-maintenance.js";
 import { applyCheckedEdits } from "../src/persistence/edits.js";
 import type {
   JournalStore,
@@ -34,6 +37,68 @@ function journalHarness() {
 }
 
 describe("AutomaticMaintenance", () => {
+  it("keeps every intermediate heading alias when a rename chain reaches the saved title", () => {
+    const intents = [
+      ["Original", "Middle"],
+      ["Middle", "Final"],
+    ].map(([oldHeading, newHeading], index) => ({
+      id: `intent-${index}`,
+      createdAt: "2026-09-22T00:00:00Z",
+      targetPath: "Target.md",
+      renames: [
+        {
+          targetPath: "Target.md",
+          oldHeading: oldHeading!,
+          newHeading: newHeading!,
+        },
+      ],
+    }));
+    expect(realizedRenameIntents("## Final\n", intents)).toEqual({
+      intentIds: ["intent-0", "intent-1"],
+      renames: [
+        {
+          targetPath: "Target.md",
+          oldHeading: "Original",
+          newHeading: "Final",
+        },
+        { targetPath: "Target.md", oldHeading: "Middle", newHeading: "Final" },
+      ],
+    });
+  });
+
+  it("synchronizes a proven rename despite an unrelated stale input intent without discarding it", () => {
+    const intents = [
+      ["typing", "unfinished-input"],
+      ["Old", "1. New"],
+      ["Still present", "1. New"],
+    ].map(([oldHeading, newHeading], index) => ({
+      id: `intent-${index}`,
+      createdAt: "2026-09-22T00:00:00Z",
+      targetPath: "Target.md",
+      renames: [
+        {
+          targetPath: "Target.md",
+          oldHeading: oldHeading!,
+          newHeading: newHeading!,
+        },
+      ],
+    }));
+    expect(
+      realizedRenameIntents("## 1. New\n## Still present\n", intents),
+    ).toEqual({
+      intentIds: [],
+      renames: [
+        { targetPath: "Target.md", oldHeading: "Old", newHeading: "1. New" },
+      ],
+    });
+    expect(
+      realizedRenameIntents(
+        "## 1. New\n## 1. New\n## Still present\n",
+        intents,
+      ),
+    ).toBeNull();
+  });
+
   it("durably stages a metadata rename before scheduling link synchronization", async () => {
     const content = new Map([
       ["Target.md", "## Renamed"],
@@ -116,93 +181,110 @@ describe("AutomaticMaintenance", () => {
     expect(removed).toEqual([["metadata-intent"]]);
   });
 
-  it("coalesces saved editor intents into link-only reverse-index work", async () => {
-    const content = new Map([
-      ["Target.md", "## 1. Beta"],
-      ["A.md", "[[Target#Beta]]"],
-      ["B.md", "[Beta](Target.md#Beta)"],
-      ["Never.md", "private unrelated body"],
-    ]);
-    const reads: string[] = [];
-    const executed: PersistedOperation[] = [];
-    const removedIntents: string[][] = [];
-    const { journal } = journalHarness();
-    const maintenance = new AutomaticMaintenance({
-      settings: () => ({
-        ...DEFAULT_STORED_SETTINGS,
-        mode: "persisted",
-      }),
-      read: async (path) => {
-        reads.push(path);
-        return content.get(path)!;
-      },
-      indexReady: () => true,
-      candidates: () => ["B.md", "A.md"],
-      resolveTarget: () => ({ kind: "file", path: "Target.md" }),
-      operationDependencies: {
-        createId: () => "auto-1",
-        now: () => "2026-08-27T00:00:00.000Z",
-        hashText: async (text) => `hash:${text}`,
-      },
-      journal,
-      renameIntents: {
-        list: () => [
-          {
-            id: "intent-1",
-            createdAt: "2026-08-31T00:00:00.000Z",
-            targetPath: "Target.md",
-            renames: [
-              {
-                targetPath: "Target.md",
-                oldHeading: "Beta",
-                newHeading: "1. Beta",
-              },
-            ],
-          },
-        ],
-        remove: async (ids) => {
-          removedIntents.push([...ids]);
+  it.each([false, true])(
+    "coalesces rename chains into link-only work with stale history=%s",
+    async (staleHistory) => {
+      const content = new Map([
+        ["Target.md", "## 1.1. Beta"],
+        ["A.md", "[[Target#Beta]]"],
+        ["B.md", "[Beta](Target.md#1.%20Beta)"],
+        ["Never.md", "private unrelated body"],
+      ]);
+      const reads: string[] = [];
+      const executed: PersistedOperation[] = [];
+      const removedIntents: string[][] = [];
+      const { journal } = journalHarness();
+      const maintenance = new AutomaticMaintenance({
+        settings: () => ({
+          ...DEFAULT_STORED_SETTINGS,
+          mode: "persisted",
+        }),
+        read: async (path) => {
+          reads.push(path);
+          return content.get(path)!;
         },
-      },
-      execute: async (operation) => {
-        executed.push(operation);
-        for (const file of operation.files) {
-          content.set(
-            file.path,
-            applyCheckedEdits(content.get(file.path)!, file.edits),
-          );
-        }
-        return {
-          kind: "completed",
-          operation: {
-            ...operation,
-            state: "completed",
-            completedPaths: operation.files.map((file) => file.path),
+        indexReady: () => true,
+        candidates: () => ["B.md", "A.md"],
+        resolveTarget: () => ({ kind: "file", path: "Target.md" }),
+        operationDependencies: {
+          createId: () => "auto-1",
+          now: () => "2026-08-27T00:00:00.000Z",
+          hashText: async (text) => `hash:${text}`,
+        },
+        journal,
+        renameIntents: {
+          list: () => [
+            {
+              id: "intent-1",
+              createdAt: "2026-08-31T00:00:00.000Z",
+              targetPath: "Target.md",
+              renames: [
+                {
+                  targetPath: "Target.md",
+                  oldHeading: "Beta",
+                  newHeading: "1. Beta",
+                },
+                {
+                  targetPath: "Target.md",
+                  oldHeading: "1. Beta",
+                  newHeading: "1.1. Beta",
+                },
+                ...(staleHistory
+                  ? [
+                      {
+                        targetPath: "Target.md",
+                        oldHeading: "typing",
+                        newHeading: "unfinished",
+                      },
+                    ]
+                  : []),
+              ],
+            },
+          ],
+          remove: async (ids) => {
+            removedIntents.push([...ids]);
           },
-        };
-      },
-      now: () => Date.parse("2026-08-27T00:00:00.000Z"),
-    });
+        },
+        execute: async (operation) => {
+          executed.push(operation);
+          for (const file of operation.files) {
+            content.set(
+              file.path,
+              applyCheckedEdits(content.get(file.path)!, file.edits),
+            );
+          }
+          return {
+            kind: "completed",
+            operation: {
+              ...operation,
+              state: "completed",
+              completedPaths: operation.files.map((file) => file.path),
+            },
+          };
+        },
+        now: () => Date.parse("2026-08-27T00:00:00.000Z"),
+      });
 
-    maintenance.schedule("Target.md", "modify");
-    maintenance.schedule("Target.md", "modify");
-    maintenance.schedule("Target.md", "modify");
-    await maintenance.flush();
+      maintenance.schedule("Target.md", "modify");
+      maintenance.schedule("Target.md", "modify");
+      maintenance.schedule("Target.md", "modify");
+      await maintenance.flush();
 
-    expect(executed).toHaveLength(1);
-    expect(content.get("Target.md")).toBe("## 1. Beta");
-    expect(content.get("A.md")).toBe("[[Target#1. Beta]]");
-    expect(content.get("B.md")).toBe("[Beta](Target.md#1.%20Beta)");
-    expect(
-      executed[0]?.files.map(({ path, role }) => ({ path, role })),
-    ).toEqual([
-      { path: "A.md", role: "link-source" },
-      { path: "B.md", role: "link-source" },
-    ]);
-    expect(reads).toEqual(["Target.md", "A.md", "B.md"]);
-    expect(reads).not.toContain("Never.md");
-    expect(removedIntents).toEqual([["intent-1"]]);
-  });
+      expect(executed).toHaveLength(1);
+      expect(content.get("Target.md")).toBe("## 1.1. Beta");
+      expect(content.get("A.md")).toBe("[[Target#1.1. Beta]]");
+      expect(content.get("B.md")).toBe("[Beta](Target.md#1.1.%20Beta)");
+      expect(
+        executed[0]?.files.map(({ path, role }) => ({ path, role })),
+      ).toEqual([
+        { path: "A.md", role: "link-source" },
+        { path: "B.md", role: "link-source" },
+      ]);
+      expect(reads).toEqual(["Target.md", "A.md", "B.md"]);
+      expect(reads).not.toContain("Never.md");
+      expect(removedIntents).toEqual(staleHistory ? [] : [["intent-1"]]);
+    },
+  );
 
   it("resumes durable rename intents after restart without a new target event", async () => {
     const content = new Map([

@@ -393,7 +393,7 @@ export function realizedRenameIntents(
       counts.set(normalized.value, (counts.get(normalized.value) ?? 0) + 1);
     }
   }
-  for (const rename of renames) {
+  const realized = renames.filter((rename) => {
     const oldHeading = normalizeHeadingFragment(rename.oldHeading);
     const newHeading = normalizeHeadingFragment(rename.newHeading);
     if (
@@ -402,12 +402,18 @@ export function realizedRenameIntents(
       (counts.get(oldHeading.value) ?? 0) !== 0 ||
       (counts.get(newHeading.value) ?? 0) !== 1
     ) {
-      return null;
+      return false;
     }
-  }
+    return true;
+  });
+  if (realized.length === 0) return null;
   return {
-    intentIds: intents.map((intent) => intent.id),
-    renames,
+    // Unproven history remains recoverable without blocking independent links.
+    intentIds:
+      realized.length === renames.length
+        ? intents.map((intent) => intent.id)
+        : [],
+    renames: realized,
   };
 }
 
@@ -416,7 +422,7 @@ function collapseRenames(renames: readonly HeadingRename[]): HeadingRename[] {
   for (const rename of renames) {
     const oldHeading = normalizeHeadingFragment(rename.oldHeading);
     if (!oldHeading.ok) continue;
-    const previous = collapsed.find((candidate) => {
+    const previous = collapsed.filter((candidate) => {
       const current = normalizeHeadingFragment(candidate.newHeading);
       return (
         candidate.targetPath === rename.targetPath &&
@@ -424,9 +430,8 @@ function collapseRenames(renames: readonly HeadingRename[]): HeadingRename[] {
         current.value === oldHeading.value
       );
     });
-    if (previous) {
-      previous.newHeading = rename.newHeading;
-      continue;
+    for (const candidate of previous) {
+      candidate.newHeading = rename.newHeading;
     }
     const sameOrigin = collapsed.find((candidate) => {
       const origin = normalizeHeadingFragment(candidate.oldHeading);

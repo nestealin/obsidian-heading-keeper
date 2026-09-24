@@ -39,6 +39,7 @@ export const refreshHeadingKeeper = StateEffect.define<void>();
 const headingKeeperTransaction = Annotation.define<boolean>();
 
 const activeEditorViews = new Set<EditorView>();
+const editorModes = new WeakMap<EditorView, boolean>();
 const editorViewsByPath = new Map<string, Set<EditorView>>();
 const compatibleEditorInfoField =
   editorInfoField as unknown as StateField<MarkdownFileInfo>;
@@ -194,6 +195,7 @@ export function createHeadingKeeperExtension(
 
       constructor(readonly view: EditorView) {
         activeEditorViews.add(view);
+        editorModes.set(view, isEditing(view));
         this.path = editorPath(view);
         registerEditorPath(view, this.path);
         this.wasComposing = isComposing(view);
@@ -288,7 +290,10 @@ export function createHeadingKeeperExtension(
           generation: this.generation,
           composing: this.view.composing,
           compositionStarted: this.view.compositionStarted,
-          unique: path !== null && editorViewsByPath.get(path)?.size === 1,
+          unique:
+            path !== null &&
+            isEditing(this.view) &&
+            editingViews(path).length === 1,
         };
       }
 
@@ -314,6 +319,21 @@ function editorInfo(view: EditorView): MarkdownFileInfo | null {
 
 function editorPath(view: EditorView): string | null {
   return editorInfo(view)?.file?.path ?? null;
+}
+
+function isEditing(view: EditorView): boolean {
+  const info = editorInfo(view);
+  if (!info) return false;
+  const getMode: unknown = Reflect.get(info, "getMode");
+  // Reading mode keeps a CodeMirror instance, but it does not own edits.
+  return (
+    typeof getMode !== "function" ||
+    Reflect.apply(getMode, info, []) === "source"
+  );
+}
+
+function editingViews(path: string): EditorView[] {
+  return [...(editorViewsByPath.get(path) ?? [])].filter(isEditing);
 }
 
 function editorSave(view: EditorView): (() => Promise<void>) | null {
@@ -359,10 +379,10 @@ function singleEditor(path: string):
       readonly view: EditorView;
       readonly save: () => Promise<void>;
     } {
-  const views = editorViewsByPath.get(path);
-  if (!views || views.size === 0) return { kind: "closed" };
-  if (views.size !== 1) return { kind: "busy" };
-  const view = [...views][0]!;
+  const views = editingViews(path);
+  if (views.length === 0) return { kind: "closed" };
+  if (views.length !== 1) return { kind: "busy" };
+  const view = views[0]!;
   const save = editorSave(view);
   if (!save || isComposing(view)) return { kind: "busy" };
   return { kind: "ready", view, save };
@@ -385,5 +405,21 @@ function dispatchEditorEdits(
 export function refreshHeadingKeeperExtensions(): void {
   for (const view of activeEditorViews) {
     view.dispatch({ effects: refreshHeadingKeeper.of(undefined) });
+  }
+}
+
+export function refreshHeadingKeeperEditorModes(): void {
+  const changedPaths = new Set<string>();
+  for (const view of activeEditorViews) {
+    const editing = isEditing(view);
+    if (editorModes.get(view) === editing) continue;
+    editorModes.set(view, editing);
+    const path = editorPath(view);
+    if (path !== null) changedPaths.add(path);
+  }
+  for (const path of changedPaths) {
+    for (const view of editorViewsByPath.get(path) ?? []) {
+      view.dispatch({ effects: refreshHeadingKeeper.of(undefined) });
+    }
   }
 }

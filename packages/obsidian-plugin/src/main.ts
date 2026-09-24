@@ -50,6 +50,7 @@ import { sha256Text } from "./persistence/plan-service.js";
 import {
   createHeadingKeeperExtension,
   openEditorFileSurface,
+  refreshHeadingKeeperEditorModes,
   refreshHeadingKeeperExtensions,
 } from "./editor-extension.js";
 import {
@@ -405,6 +406,9 @@ export class HeadingKeeperPlugin extends Plugin {
           await this.dataStore?.renameIntents.remove([intentId]);
         },
       }),
+    );
+    this.registerEvent(
+      this.app.workspace.on("layout-change", refreshHeadingKeeperEditorModes),
     );
     this.registerMarkdownPostProcessor(async (root, context) => {
       const token = {};

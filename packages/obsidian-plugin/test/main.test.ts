@@ -271,6 +271,7 @@ vi.mock("obsidian", () => {
 });
 
 vi.mock("../src/editor-extension.js", () => ({
+  refreshHeadingKeeperEditorModes: () => undefined,
   openEditorFileSurface: undefined,
   createHeadingKeeperExtension: (
     _settings: unknown,
@@ -519,6 +520,23 @@ describe("HeadingKeeperPlugin", () => {
     plugin.onunload();
     expect(root.prefixes()).toEqual([]);
     expect(state.vaultWrites).toBe(0);
+  });
+
+  it("removes Reading prefixes when switching to persisted mode", async () => {
+    const root = createReadingRoot(2);
+    state.readingMarkdown.set("virtual.md", "## Root");
+    const plugin = new HeadingKeeperPlugin();
+    await plugin.onload();
+    const processor = state.postProcessors[0] as (
+      root: HTMLElement,
+      context: { sourcePath: string },
+    ) => Promise<void>;
+
+    await processor(root as unknown as HTMLElement, readingContext());
+    expect(root.prefixes()).toEqual(["1. "]);
+    await plugin.saveSettings({ ...plugin.settings, mode: "persisted" });
+    expect(root.prefixes()).toEqual([]);
+    plugin.onunload();
   });
 
   it("maps separate Reading sections to global heading numbers", async () => {
