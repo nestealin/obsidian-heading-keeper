@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_STORED_SETTINGS } from "../src/settings.js";
 import {
@@ -9,11 +10,20 @@ import {
 } from "../src/reading-processor.js";
 import { planEditorDecorations } from "../src/editor-extension.js";
 
+class FakeText {
+  readonly nodeType = 3;
+  parentElement: FakeElement | undefined;
+
+  constructor(public data: string) {}
+}
+
 class FakeElement {
   readonly attributes = new Map<string, string>();
   readonly children: FakeElement[] = [];
+  readonly childNodes: Array<FakeElement | FakeText> = [];
   parentElement: FakeElement | undefined;
   textContent = "";
+  throwOnInsert = false;
 
   className = "";
 
@@ -21,28 +31,57 @@ class FakeElement {
 
   readonly ownerDocument = {
     createElement: (tagName: string) => new FakeElement(tagName.toUpperCase()),
+    createTreeWalker: (root: FakeElement) => ({
+      nextNode: (): FakeText | null => {
+        const visit = (element: FakeElement): FakeText | null => {
+          for (const child of element.childNodes) {
+            if (child instanceof FakeText) return child;
+            const nested = visit(child);
+            if (nested) return nested;
+          }
+          return null;
+        };
+        return visit(root);
+      },
+    }),
   };
 
-  get firstChild(): FakeElement | undefined {
-    return this.children[0];
+  get firstChild(): FakeElement | FakeText | undefined {
+    return this.childNodes[0];
+  }
+
+  appendText(data: string): FakeText {
+    const text = new FakeText(data);
+    text.parentElement = this;
+    this.childNodes.push(text);
+    return text;
   }
 
   appendChild(child: FakeElement): FakeElement {
     child.parentElement = this;
     this.children.push(child);
+    this.childNodes.push(child);
     return child;
   }
 
   insertBefore(
     child: FakeElement,
-    before: FakeElement | undefined,
+    before: FakeElement | FakeText | undefined,
   ): FakeElement {
+    if (this.throwOnInsert) throw new Error("render-insert-failed");
     child.parentElement = this;
-    const index = before ? this.children.indexOf(before) : -1;
-    if (index < 0) {
+    const nodeIndex = before ? this.childNodes.indexOf(before) : -1;
+    if (nodeIndex < 0) {
+      this.childNodes.push(child);
+    } else {
+      this.childNodes.splice(nodeIndex, 0, child);
+    }
+    const elementIndex =
+      before instanceof FakeElement ? this.children.indexOf(before) : -1;
+    if (elementIndex < 0) {
       this.children.push(child);
     } else {
-      this.children.splice(index, 0, child);
+      this.children.splice(elementIndex, 0, child);
     }
     return child;
   }
@@ -51,6 +90,10 @@ class FakeElement {
     const index = this.parentElement?.children.indexOf(this) ?? -1;
     if (index >= 0) {
       this.parentElement?.children.splice(index, 1);
+    }
+    const nodeIndex = this.parentElement?.childNodes.indexOf(this) ?? -1;
+    if (nodeIndex >= 0) {
+      this.parentElement?.childNodes.splice(nodeIndex, 1);
     }
   }
 
@@ -90,12 +133,29 @@ const firstSection = { lineEnd: 0, lineStart: 0 };
 
 describe("Reading virtual decorations", () => {
   it("splits only the managed source prefix from rendered heading text", () => {
-    expect(splitReadingPrefix("9. Old title", 3)).toEqual({
+    expect(splitReadingPrefix("9. Old title", "9. ")).toEqual({
       hidden: "9. ",
       visible: "Old title",
     });
-    expect(splitReadingPrefix("9. Old title", 0)).toBeNull();
-    expect(splitReadingPrefix("9. Old title", 99)).toBeNull();
+    expect(splitReadingPrefix("9. Old title", "")).toBeNull();
+    expect(splitReadingPrefix("9. Old title", "8. ")).toBeNull();
+    expect(
+      splitReadingPrefix("9. Old title", "9. Old title and more"),
+    ).toBeNull();
+  });
+
+  it("never drops bytes while splitting arbitrary rendered text", () => {
+    fc.assert(
+      fc.property(fc.string(), fc.string({ minLength: 1 }), (text, prefix) => {
+        const result = splitReadingPrefix(text, prefix);
+        if (text.startsWith(prefix)) {
+          expect(result?.hidden + result?.visible).toBe(text);
+        } else {
+          expect(result).toBeNull();
+        }
+      }),
+      { numRuns: 1000 },
+    );
   });
 
   it("has prefix parity with editor decorations for CRLF and Unicode headings", () => {
@@ -155,9 +215,83 @@ describe("Reading virtual decorations", () => {
         { lineEnd: 1, lineStart: 0 },
       ).prefixes,
     ).toEqual([
-      { index: 0, replaceCharacters: 3, text: "1. " },
+      { index: 0, replaceText: "9. ", text: "1. " },
       { index: 1, text: "2. " },
     ]);
+  });
+
+  it("does not remove foreign inline text before a managed prefix", () => {
+    const root = readingRoot([2]);
+    const heading = root.children[0]!;
+    const foreign = heading.appendChild(new FakeElement("SPAN"));
+    const foreignText = foreign.appendText("重要标签");
+    const titleText = heading.appendText("9. 保留标题");
+
+    decorateReadingHeadings(
+      root as unknown as HTMLElement,
+      "## 9. 保留标题",
+      DEFAULT_STORED_SETTINGS,
+      firstSection,
+    );
+
+    expect(foreignText.data).toBe("重要标签");
+    expect(titleText.data).toBe("保留标题");
+    expect(root.querySelectorAll(".heading-keeper-prefix")).toHaveLength(1);
+    clearHeadingKeeperPrefixes(root as unknown as HTMLElement);
+    expect(titleText.data).toBe("9. 保留标题");
+    expect(foreignText.data).toBe("重要标签");
+  });
+
+  it("does not hide unrelated text when rendered source prefix is missing", () => {
+    const root = readingRoot([2]);
+    const titleText = root.children[0]!.appendText("保留标题");
+
+    decorateReadingHeadings(
+      root as unknown as HTMLElement,
+      "## 9. 保留标题",
+      DEFAULT_STORED_SETTINGS,
+      firstSection,
+    );
+
+    expect(titleText.data).toBe("保留标题");
+    expect(root.querySelectorAll(".heading-keeper-prefix")).toHaveLength(0);
+  });
+
+  it("does not hide source text when inserting the visual prefix fails", () => {
+    const root = readingRoot([2]);
+    const heading = root.children[0]!;
+    const titleText = heading.appendText("9. 保留标题");
+    heading.throwOnInsert = true;
+
+    expect(() =>
+      decorateReadingHeadings(
+        root as unknown as HTMLElement,
+        "## 9. 保留标题",
+        DEFAULT_STORED_SETTINGS,
+        firstSection,
+      ),
+    ).toThrow("render-insert-failed");
+    expect(titleText.data).toBe("9. 保留标题");
+    expect(root.querySelectorAll(".heading-keeper-prefix")).toHaveLength(0);
+  });
+
+  it("clears virtual prefixes and does not decorate in persisted mode", () => {
+    const root = readingRoot([2]);
+    decorateReadingHeadings(
+      root as unknown as HTMLElement,
+      "## Root",
+      DEFAULT_STORED_SETTINGS,
+      firstSection,
+    );
+    expect(root.querySelectorAll(".heading-keeper-prefix")).toHaveLength(1);
+
+    decorateReadingHeadings(
+      root as unknown as HTMLElement,
+      "## Root",
+      { ...DEFAULT_STORED_SETTINGS, mode: "persisted" },
+      firstSection,
+    );
+    expect(root.querySelectorAll(".heading-keeper-prefix")).toHaveLength(0);
   });
 
   it("preserves hierarchy for a non-first section with a different heading level", () => {
@@ -167,6 +301,19 @@ describe("Reading virtual decorations", () => {
         lineStart: 1,
       }),
     ).toEqual({ diagnostics: [], prefixes: [{ index: 0, text: "1.1. " }] });
+  });
+
+  it("does not overlay a noncanonical numeric heading in Reading virtual mode", () => {
+    const markdown =
+      "## 根因分析\n### 1. 初步假设\n### 2. 验证过程\n#### 2.1 锁定运行态目标\n";
+    expect(
+      planReadingDecorations(
+        markdown,
+        { ...DEFAULT_STORED_SETTINGS, topLevel: 3, bottomLevel: 5 },
+        [2, 3, 3, 4],
+        { lineStart: 0, lineEnd: 3 },
+      ),
+    ).toEqual({ diagnostics: [], prefixes: [] });
   });
 
   it("rejects null and out-of-range section metadata without decorations", () => {

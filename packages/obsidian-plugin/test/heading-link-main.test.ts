@@ -177,6 +177,7 @@ vi.mock("obsidian", () => {
 });
 
 vi.mock("../src/editor-extension.js", () => ({
+  refreshHeadingKeeperEditorModes: () => undefined,
   openEditorFileSurface: undefined,
   createHeadingKeeperExtension: () => ({}),
   refreshHeadingKeeperExtensions: () => undefined,

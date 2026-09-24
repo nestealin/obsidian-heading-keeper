@@ -137,6 +137,26 @@ describe("classifyOwnership", () => {
     expect(classifyOwnership(heading("3D Printing"), "1")).toBe("absent");
   });
 
+  it.each([
+    ["2.1 锁定运行态目标", "2.1"],
+    ["2.1 锁定运行态目标", "2.2"],
+    ["3.14 radians", "2.3"],
+    ["1.2.3 Release", "1.2.3"],
+  ])("preserves an unowned numeric chain in %s", (title, expectedPrefix) => {
+    expect(classifyOwnership(heading(title), expectedPrefix)).toBe("ambiguous");
+  });
+
+  it("keeps a dotted semantic title when its depth differs from the configured prefix", () => {
+    expect(classifyOwnership(heading("3.14 radians"), "1")).toBe("semantic");
+    expect(classifyOwnership(heading("1.2.3 Release"), "1.1")).toBe("semantic");
+    expect(
+      classifyOwnership(heading("2.1 release"), "1-1", {
+        numberSeparator: "-",
+        titleSeparator: " — ",
+      }),
+    ).toBe("semantic");
+  });
+
   it("protects long numeric-leading titles containing generated numeric or punctuation separators", () => {
     const separator = fc
       .array(
@@ -192,7 +212,7 @@ describe("classifyOwnership", () => {
     ["IPv4", "192.168.1.1 gateway", "1.1"],
     ["version", "v1.2.3 release", "1.2.3"],
     ["port", "8080 service", "1"],
-    ["decimal", "3.14 radians", "3.14"],
+    ["decimal", "3.14 radians", "1"],
   ] as const)(
     "preserves a leading %s as semantic text",
     (_, title, expected) => {

@@ -8,10 +8,13 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_STORED_SETTINGS } from "../src/settings.js";
 import {
   createHeadingKeeperExtension,
+  openEditorFileSurface,
   planEditorDecorations,
+  refreshHeadingKeeperEditorModes,
 } from "../src/editor-extension.js";
 
-function editorExtensionHarness(markdown: string) {
+function editorExtensionHarness(markdown: string, initialMode = "source") {
+  let mode = initialMode;
   let state = EditorState.create({ doc: markdown });
   let composing = false;
   let compositionStarted = false;
@@ -20,6 +23,7 @@ function editorExtensionHarness(markdown: string) {
   const actions: string[] = [];
   const info = {
     file: { path: "Target.md" },
+    getMode: () => mode,
     save: async () => actions.push("save"),
   };
   const ownerWindow = {
@@ -67,7 +71,12 @@ function editorExtensionHarness(markdown: string) {
     },
   } as unknown as EditorView;
   const extension = createHeadingKeeperExtension(
-    () => ({ ...DEFAULT_STORED_SETTINGS, mode: "persisted" }),
+    () => ({
+      ...DEFAULT_STORED_SETTINGS,
+      topLevel: 3,
+      bottomLevel: 5,
+      mode: "persisted",
+    }),
     {
       stage: async () => {
         actions.push("stage");
@@ -87,6 +96,9 @@ function editorExtensionHarness(markdown: string) {
   return {
     actions,
     plugin,
+    setMode: (next: string) => {
+      mode = next;
+    },
     pendingTimers: () => timers.size,
     setComposition: (active: boolean) => {
       composing = active;
@@ -113,14 +125,99 @@ function editorExtensionHarness(markdown: string) {
       if (!entry) throw new Error("timer-missing");
       timers.delete(entry[0]);
       entry[1]();
-      await Promise.resolve();
-      await Promise.resolve();
+      for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
     },
     state: () => state,
   };
 }
 
 describe("editor virtual decorations", () => {
+  it("updates a heading link through the source editor with a reading view open", async () => {
+    const before = "[[Target#Old]]\n";
+    const after = "[[Target#New]]\n";
+    const source = editorExtensionHarness(before);
+    const preview = editorExtensionHarness(before, "preview");
+    try {
+      const result = await openEditorFileSurface.compareAndUpdate(
+        "Target.md",
+        before,
+        after,
+        [
+          {
+            range: { from: 9, to: 12 },
+            expectedText: "Old",
+            replacementText: "New",
+          },
+        ],
+        async (text) => text,
+      );
+      expect(result.kind).toBe("updated");
+      expect(source.state().doc.toString()).toBe(after);
+      expect(preview.state().doc.toString()).toBe(before);
+    } finally {
+      source.plugin.destroy();
+      preview.plugin.destroy();
+    }
+  });
+
+  it("numbers the source editor while a reading view retains its CodeMirror instance", async () => {
+    const source = editorExtensionHarness(
+      "### Parent\n#### Group\n##### Child\n",
+    );
+    const preview = editorExtensionHarness(
+      "### Parent\n#### Group\n##### Child\n",
+      "preview",
+    );
+    try {
+      await source.runTimer();
+      await preview.runTimer();
+      expect(source.state().doc.toString()).toBe(
+        "### 1. Parent\n#### 1.1. Group\n##### 1.1.1. Child\n",
+      );
+      expect(preview.state().doc.toString()).toBe(
+        "### Parent\n#### Group\n##### Child\n",
+      );
+      expect(openEditorFileSurface.read("Target.md")).toEqual({
+        kind: "ready",
+        text: source.state().doc.toString(),
+      });
+    } finally {
+      source.plugin.destroy();
+      preview.plugin.destroy();
+    }
+  });
+
+  it("does not number a retained reading-mode editor", async () => {
+    const preview = editorExtensionHarness("### Parent\n", "preview");
+    try {
+      await preview.runTimer();
+      expect(preview.state().doc.toString()).toBe("### Parent\n");
+      expect(preview.actions).toEqual([]);
+    } finally {
+      preview.plugin.destroy();
+    }
+  });
+
+  it("resumes after a second editor switches to reading mode and blocks when it switches back", async () => {
+    const first = editorExtensionHarness("### Parent\n");
+    const second = editorExtensionHarness("### Parent\n");
+    try {
+      await first.runTimer();
+      await second.runTimer();
+      expect(first.state().doc.toString()).toBe("### Parent\n");
+      expect(openEditorFileSurface.read("Target.md").kind).toBe("busy");
+      second.setMode("preview");
+      refreshHeadingKeeperEditorModes();
+      await first.runTimer();
+      expect(first.state().doc.toString()).toBe("### 1. Parent\n");
+      second.setMode("source");
+      expect(openEditorFileSurface.read("Target.md").kind).toBe("busy");
+    } finally {
+      first.plugin.destroy();
+      second.plugin.destroy();
+    }
+  });
+
   it("uses core prefixes for headings while excluding protected Markdown", () => {
     const markdown = [
       "---",
@@ -179,6 +276,15 @@ describe("editor virtual decorations", () => {
     ).toEqual([]);
   });
 
+  it("does not overlay a noncanonical numeric heading in virtual mode", () => {
+    expect(
+      planEditorDecorations(
+        "## 根因分析\n### 1. 初步假设\n### 2. 验证过程\n#### 2.1 锁定运行态目标\n",
+        { ...DEFAULT_STORED_SETTINGS, topLevel: 3, bottomLevel: 5 },
+      ),
+    ).toEqual([]);
+  });
+
   it("suppresses virtual widgets on the active editing line", () => {
     expect(
       planEditorDecorations("## Alpha\n### Child\n", DEFAULT_STORED_SETTINGS, {
@@ -210,6 +316,7 @@ describe("editor virtual decorations", () => {
     });
 
     harness.update(undo.state, [undo]);
+    refreshHeadingKeeperEditorModes();
 
     expect(harness.pendingTimers()).toBe(0);
     harness.plugin.destroy();

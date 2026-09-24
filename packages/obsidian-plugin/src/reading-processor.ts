@@ -7,7 +7,7 @@ import {
 
 export interface ReadingPrefix {
   index: number;
-  replaceCharacters?: number;
+  replaceText?: string;
   text: string;
 }
 
@@ -161,11 +161,14 @@ function visibleHeadings(root: HTMLElement): HTMLElement[] {
 
 export function planReadingDecorations(
   markdown: string,
-  settings: NumberingSettings,
+  settings: NumberingSettings & { mode?: "virtual" | "persisted" },
   visibleLevels: readonly number[],
   section: ReadingSection | null,
   excludedSections: readonly ReadingSection[] = [],
 ): ReadingDecorationPlan {
+  if (settings.mode === "persisted") {
+    return { diagnostics: [], prefixes: [] };
+  }
   if (!isSectionInfo(section)) {
     return diagnostic(
       "reading-section-info-invalid",
@@ -230,8 +233,10 @@ export function planReadingDecorations(
         text: `${entry.displayPrefix}${plan.format.titleSeparator}`,
         ...(analysis.managedRange
           ? {
-              replaceCharacters:
-                analysis.managedRange.to - analysis.managedRange.from,
+              replaceText: entry.heading.rawText.slice(
+                analysis.managedRange.from - entry.heading.contentRange.from,
+                analysis.managedRange.to - entry.heading.contentRange.from,
+              ),
             }
           : {}),
       },
@@ -242,41 +247,33 @@ export function planReadingDecorations(
 
 export function splitReadingPrefix(
   text: string,
-  replaceCharacters: number,
+  expectedPrefix: string,
 ): { hidden: string; visible: string } | null {
-  if (
-    !Number.isInteger(replaceCharacters) ||
-    replaceCharacters <= 0 ||
-    replaceCharacters > text.length
-  ) {
+  if (expectedPrefix.length === 0 || !text.startsWith(expectedPrefix)) {
     return null;
   }
   return {
-    hidden: text.slice(0, replaceCharacters),
-    visible: text.slice(replaceCharacters),
+    hidden: expectedPrefix,
+    visible: text.slice(expectedPrefix.length),
   };
 }
 
-function firstTextNode(heading: HTMLElement): Text | null {
-  const createTreeWalker = heading.ownerDocument.createTreeWalker;
-  if (typeof createTreeWalker !== "function") return null;
-  const candidate = createTreeWalker
-    .call(heading.ownerDocument, heading, 4)
-    .nextNode();
-  return candidate?.nodeType === 3 ? (candidate as Text) : null;
+function firstDirectTextNode(heading: HTMLElement): Text | null {
+  return (
+    (Array.from(heading.childNodes).find((node) => node.nodeType === 3) as
+      | Text
+      | undefined) ?? null
+  );
 }
 
-function replaceReadingSourcePrefix(
+function prepareReadingSourcePrefix(
   heading: HTMLElement,
-  replaceCharacters: number,
-  ownedRoot: OwnedRoot,
-): void {
-  const node = firstTextNode(heading);
-  if (!node) return;
-  const split = splitReadingPrefix(node.data, replaceCharacters);
-  if (!split) return;
-  node.data = split.visible;
-  ownedRoot.replacements.push({ hidden: split.hidden, node });
+  expectedPrefix: string,
+): { hidden: string; node: Text; visible: string } | null {
+  const node = firstDirectTextNode(heading);
+  if (!node) return null;
+  const split = splitReadingPrefix(node.data, expectedPrefix);
+  return split ? { ...split, node } : null;
 }
 
 export function clearHeadingKeeperPrefixes(root: HTMLElement): void {
@@ -303,7 +300,7 @@ export function disposeReadingRoot(root: HTMLElement): void {
 export function decorateReadingHeadings(
   root: HTMLElement,
   markdown: string,
-  settings: NumberingSettings,
+  settings: NumberingSettings & { mode?: "virtual" | "persisted" },
   section: ReadingSection | null,
   sourcePath = "",
 ): Pick<ReadingDecorationPlan, "diagnostics"> {
@@ -323,8 +320,12 @@ export function decorateReadingHeadings(
     if (!heading) {
       continue;
     }
-    if (prefix.replaceCharacters !== undefined) {
-      replaceReadingSourcePrefix(heading, prefix.replaceCharacters, ownedRoot);
+    const replacement =
+      prefix.replaceText === undefined
+        ? null
+        : prepareReadingSourcePrefix(heading, prefix.replaceText);
+    if (prefix.replaceText !== undefined && !replacement) {
+      continue;
     }
     const element = root.ownerDocument.createElement("span");
     element.className = "heading-keeper-prefix";
@@ -333,6 +334,13 @@ export function decorateReadingHeadings(
     element.textContent = prefix.text;
     heading.insertBefore(element, heading.firstChild);
     ownedRoot.prefixes.add(element);
+    if (replacement) {
+      replacement.node.data = replacement.visible;
+      ownedRoot.replacements.push({
+        hidden: replacement.hidden,
+        node: replacement.node,
+      });
+    }
   }
 
   return { diagnostics: decorationPlan.diagnostics };

@@ -21,6 +21,54 @@ function after(beforeText: string, file: PlannedFileChange | undefined) {
 }
 
 describe("buildWorkflowPreview", () => {
+  it.each(["add", "remove"] as const)(
+    "keeps unowned numeric headings and their links byte-identical on %s",
+    async (kind) => {
+      const target = [
+        "## 根因分析",
+        "### 1. 初步假设",
+        "### 2. 验证过程",
+        "#### 2.1 锁定运行态目标",
+        "正文 [[#2.1 锁定运行态目标]] 保持原样。",
+      ].join("\n");
+      const links = "[[Target#2.1 锁定运行态目标|跳转]]";
+      const result = await buildWorkflowPreview(
+        {
+          kind,
+          targetPath: "Target.md",
+          sources: [
+            { path: "Target.md", text: target },
+            { path: "Links.md", text: links },
+          ],
+          settings: { ...settings, topLevel: 3, bottomLevel: 5 },
+          resolveTarget: (sourcePath, linkPath) => ({
+            kind: "file",
+            path: linkPath === "" ? sourcePath : "Target.md",
+          }),
+        },
+        deps,
+      );
+
+      if (kind === "add") {
+        expect(result.kind).toBe("no-op");
+        expect(result.groups.targetEdits).toEqual([]);
+      } else {
+        expect(result.kind).toBe("preview");
+        if (result.kind === "preview") {
+          const changed = after(target, result.operation.files[0]);
+          expect(changed).toContain("#### 2.1 锁定运行态目标");
+          expect(changed).toContain("[[#2.1 锁定运行态目标]]");
+        }
+      }
+      expect(result.groups.linkSources).toEqual([]);
+      expect(result.groups.preserved).toContainEqual({
+        path: "Target.md",
+        code: "ambiguous-prefix",
+        line: 3,
+      });
+    },
+  );
+
   it("builds link-only automatic work without materializing target numbering from disk", async () => {
     const target = "## Renamed\n[[#Old]]";
     const links = "[[Target#Old]]";
