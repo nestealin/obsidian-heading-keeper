@@ -41,6 +41,7 @@ const headingKeeperTransaction = Annotation.define<boolean>();
 const activeEditorViews = new Set<EditorView>();
 const editorModes = new WeakMap<EditorView, boolean>();
 const editorViewsByPath = new Map<string, Set<EditorView>>();
+const ownerWakeups = new Map<EditorView, () => void>();
 const compatibleEditorInfoField =
   editorInfoField as unknown as StateField<MarkdownFileInfo>;
 
@@ -192,25 +193,58 @@ export function createHeadingKeeperExtension(
       private path: string | null = null;
       private timer: number | null = null;
       private wasComposing: boolean;
+      private ownerKind: EditorViewKind;
 
       constructor(readonly view: EditorView) {
-        activeEditorViews.add(view);
-        editorModes.set(view, isEditing(view));
-        this.path = editorPath(view);
-        registerEditorPath(view, this.path);
+        this.ownerKind = classifyEditorView(view);
         this.wasComposing = isComposing(view);
-        this.decorations = createDecorations(view, getSettings);
+        this.decorations = Decoration.none;
+        if (this.ownerKind === "full-owner") this.claimOwner(getSettings);
+      }
+
+      private claimOwner(getSettings: () => StoredSettings): void {
+        activeEditorViews.add(this.view);
+        editorModes.set(this.view, isEditing(this.view));
+        this.path = editorPath(this.view);
+        registerEditorPath(this.view, this.path, () => {
+          if (this.disposed || this.ownerKind !== "full-owner") return;
+          if (getSettings().mode === "persisted") this.schedule();
+        });
+        this.decorations = createDecorations(this.view, getSettings);
         if (getSettings().mode === "persisted") this.schedule();
+      }
+
+      private releaseOwner(): void {
+        this.clearScheduled();
+        unregisterEditorPath(this.view, this.path);
+        activeEditorViews.delete(this.view);
+        editorModes.delete(this.view);
+        this.path = null;
+        this.decorations = Decoration.none;
       }
 
       update(update: ViewUpdate): void {
         const previousComposing = this.wasComposing;
         this.wasComposing = isComposing(update.view);
+        const nextKind = classifyEditorView(update.view);
+        if (nextKind !== this.ownerKind) {
+          if (this.ownerKind === "full-owner") this.releaseOwner();
+          this.ownerKind = nextKind;
+          if (nextKind === "full-owner") this.claimOwner(getSettings);
+        }
+        if (this.ownerKind !== "full-owner") return;
         const nextPath = editorPath(update.view);
         if (nextPath !== this.path) {
           unregisterEditorPath(update.view, this.path);
           this.path = nextPath;
-          registerEditorPath(update.view, this.path);
+          registerEditorPath(update.view, this.path, () => {
+            if (
+              !this.disposed &&
+              this.ownerKind === "full-owner" &&
+              getSettings().mode === "persisted"
+            )
+              this.schedule();
+          });
           this.generation += 1;
         }
         if (update.docChanged) this.generation += 1;
@@ -242,10 +276,9 @@ export function createHeadingKeeperExtension(
       }
 
       destroy(): void {
+        if (this.disposed) return;
         this.disposed = true;
-        this.clearScheduled();
-        unregisterEditorPath(this.view, this.path);
-        activeEditorViews.delete(this.view);
+        if (this.ownerKind === "full-owner") this.releaseOwner();
       }
 
       private schedule(): void {
@@ -321,6 +354,18 @@ function editorPath(view: EditorView): string | null {
   return editorInfo(view)?.file?.path ?? null;
 }
 
+export type EditorViewKind = "full-owner" | "nested" | "unknown";
+
+/** The editor-info field is shared with native cell editors; DOM ownership is not. */
+export function classifyEditorView(view: EditorView): EditorViewKind {
+  const parent = view.dom?.parentElement;
+  if (!parent || typeof parent.closest !== "function") return "unknown";
+  if (parent.closest(".cm-editor")) return "nested";
+  const info = editorInfo(view);
+  if (!info?.file) return "unknown";
+  return "full-owner";
+}
+
 function isEditing(view: EditorView): boolean {
   const info = editorInfo(view);
   if (!info) return false;
@@ -350,25 +395,30 @@ function isComposing(view: EditorView): boolean {
   return view.composing || view.compositionStarted;
 }
 
-function registerEditorPath(view: EditorView, path: string | null): void {
+function registerEditorPath(
+  view: EditorView,
+  path: string | null,
+  wake: () => void,
+): void {
   if (path === null) return;
   const views = editorViewsByPath.get(path) ?? new Set<EditorView>();
   views.add(view);
+  ownerWakeups.set(view, wake);
   editorViewsByPath.set(path, views);
 }
 
 function unregisterEditorPath(view: EditorView, path: string | null): void {
   if (path === null) return;
   const views = editorViewsByPath.get(path);
-  if (!views) return;
-  views.delete(view);
-  if (views.size === 0) {
-    editorViewsByPath.delete(path);
-    return;
-  }
-  for (const remaining of views) {
-    remaining.dispatch({ effects: refreshHeadingKeeper.of(undefined) });
-  }
+  if (!views || !views.delete(view)) return;
+  ownerWakeups.delete(view);
+  if (views.size === 0) editorViewsByPath.delete(path);
+  else wakeMaintenance(path);
+}
+
+function wakeMaintenance(path: string): void {
+  const owners = editingViews(path);
+  if (owners.length === 1) ownerWakeups.get(owners[0]!)?.();
 }
 
 function singleEditor(path: string):
@@ -417,9 +467,5 @@ export function refreshHeadingKeeperEditorModes(): void {
     const path = editorPath(view);
     if (path !== null) changedPaths.add(path);
   }
-  for (const path of changedPaths) {
-    for (const view of editorViewsByPath.get(path) ?? []) {
-      view.dispatch({ effects: refreshHeadingKeeper.of(undefined) });
-    }
-  }
+  for (const path of changedPaths) wakeMaintenance(path);
 }
