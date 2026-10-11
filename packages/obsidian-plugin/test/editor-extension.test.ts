@@ -3,17 +3,27 @@ import {
   Transaction,
   type TransactionSpec,
 } from "@codemirror/state";
-import type { EditorView, ViewUpdate } from "@codemirror/view";
+import { Decoration, type EditorView, type ViewUpdate } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_STORED_SETTINGS } from "../src/settings.js";
 import {
   createHeadingKeeperExtension,
   openEditorFileSurface,
   planEditorDecorations,
+  refreshHeadingKeeperExtensions,
   refreshHeadingKeeperEditorModes,
 } from "../src/editor-extension.js";
 
-function editorExtensionHarness(markdown: string, initialMode = "source") {
+function editorExtensionHarness(
+  markdown: string,
+  initialMode = "source",
+  options: {
+    nested?: boolean;
+    noEditor?: boolean;
+    noFile?: boolean;
+    virtual?: boolean;
+  } = {},
+) {
   let mode = initialMode;
   let state = EditorState.create({ doc: markdown });
   let composing = false;
@@ -21,8 +31,12 @@ function editorExtensionHarness(markdown: string, initialMode = "source") {
   let nextTimer = 1;
   const timers = new Map<number, () => void>();
   const actions: string[] = [];
+  let dispatches = 0;
   const info = {
-    file: { path: "Target.md" },
+    file: options.noFile ? undefined : { path: "Target.md" },
+    editor: options.noEditor
+      ? undefined
+      : { getValue: () => state.doc.toString() },
     getMode: () => mode,
     save: async () => actions.push("save"),
   };
@@ -38,6 +52,7 @@ function editorExtensionHarness(markdown: string, initialMode = "source") {
     | {
         update: (update: ViewUpdate) => void;
         destroy: () => void;
+        decorations: typeof Decoration.none;
       }
     | undefined;
   const view = {
@@ -55,8 +70,12 @@ function editorExtensionHarness(markdown: string, initialMode = "source") {
       return compositionStarted;
     },
     hasFocus: true,
-    dom: { ownerDocument: { defaultView: ownerWindow } },
+    dom: {
+      ownerDocument: { defaultView: ownerWindow },
+      parentElement: { closest: () => (options.nested ? {} : null) },
+    },
     dispatch: (spec: TransactionSpec) => {
+      dispatches += 1;
       const transaction = state.update(spec);
       state = transaction.state;
       pluginRef?.update({
@@ -75,7 +94,7 @@ function editorExtensionHarness(markdown: string, initialMode = "source") {
       ...DEFAULT_STORED_SETTINGS,
       topLevel: 3,
       bottomLevel: 5,
-      mode: "persisted",
+      mode: options.virtual ? "virtual" : "persisted",
     }),
     {
       stage: async () => {
@@ -96,6 +115,20 @@ function editorExtensionHarness(markdown: string, initialMode = "source") {
   return {
     actions,
     plugin,
+    dispatchCount: () => dispatches,
+    setPath: (path: string) => {
+      if (!info.file) throw new Error("file-missing");
+      info.file.path = path;
+      plugin.update({
+        view,
+        state,
+        transactions: [],
+        docChanged: false,
+        focusChanged: false,
+        selectionSet: false,
+        viewportChanged: false,
+      } as unknown as ViewUpdate);
+    },
     setMode: (next: string) => {
       mode = next;
     },
@@ -132,6 +165,155 @@ function editorExtensionHarness(markdown: string, initialMode = "source") {
 }
 
 describe("editor virtual decorations", () => {
+  it("does not register or refresh a nested table cell as a file owner", async () => {
+    const outer = editorExtensionHarness("### Whole note\n");
+    const nested = editorExtensionHarness("cell text", "source", {
+      nested: true,
+    });
+    try {
+      expect(nested.plugin.decorations).toBe(Decoration.none);
+      expect(nested.pendingTimers()).toBe(0);
+      expect(openEditorFileSurface.read("Target.md")).toEqual({
+        kind: "ready",
+        text: outer.state().doc.toString(),
+      });
+      const edit = nested
+        .state()
+        .update({ changes: { from: 0, to: 4, insert: "CELL" } });
+      nested.update(edit.state, [edit]);
+      expect(nested.pendingTimers()).toBe(0);
+      expect(nested.actions).toEqual([]);
+      const outerDispatches = outer.dispatchCount();
+      nested.plugin.destroy();
+      expect(outer.dispatchCount()).toBe(outerDispatches);
+      expect(openEditorFileSurface.read("Target.md").kind).toBe("ready");
+    } finally {
+      outer.plugin.destroy();
+      nested.plugin.destroy();
+    }
+  });
+
+  it("fails closed for a view without an editor owner", () => {
+    const unknown = editorExtensionHarness("### Unknown\n", "source", {
+      noFile: true,
+    });
+    try {
+      expect(unknown.plugin.decorations).toBe(Decoration.none);
+      expect(unknown.pendingTimers()).toBe(0);
+      expect(openEditorFileSurface.read("Target.md")).toEqual({
+        kind: "closed",
+      });
+    } finally {
+      unknown.plugin.destroy();
+    }
+  });
+
+  it("keeps a top-level view when optional editorInfo.editor is absent", () => {
+    const owner = editorExtensionHarness("### Owner\n", "source", {
+      noEditor: true,
+    });
+    try {
+      expect(openEditorFileSurface.read("Target.md")).toEqual({
+        kind: "ready",
+        text: "### Owner\n",
+      });
+      expect(owner.pendingTimers()).toBe(1);
+    } finally {
+      owner.plugin.destroy();
+    }
+  });
+
+  it("keeps virtual decorations without optional editorInfo.editor", () => {
+    const owner = editorExtensionHarness("### Owner\n#### Child\n", "source", {
+      noEditor: true,
+      virtual: true,
+    });
+    try {
+      expect(owner.plugin.decorations.size).toBe(1);
+      expect(owner.pendingTimers()).toBe(0);
+    } finally {
+      owner.plugin.destroy();
+    }
+  });
+
+  it("does not send global refresh transactions to a nested cell", () => {
+    const outer = editorExtensionHarness("### Whole note\n");
+    const nested = editorExtensionHarness("cell text", "source", {
+      nested: true,
+    });
+    try {
+      refreshHeadingKeeperExtensions();
+      expect(outer.dispatchCount()).toBe(1);
+      expect(nested.dispatchCount()).toBe(0);
+    } finally {
+      outer.plugin.destroy();
+      nested.plugin.destroy();
+    }
+  });
+
+  it("wakes a surviving full-note editor without dispatch and only once", async () => {
+    const first = editorExtensionHarness("### Waiting\n");
+    const second = editorExtensionHarness("### Waiting\n");
+    try {
+      await first.runTimer();
+      await second.runTimer();
+      expect(openEditorFileSurface.read("Target.md").kind).toBe("busy");
+      const before = first.dispatchCount();
+      second.plugin.destroy();
+      expect(first.pendingTimers()).toBe(1);
+      expect(first.dispatchCount()).toBe(before);
+      second.plugin.destroy();
+      expect(first.pendingTimers()).toBe(1);
+      expect(first.dispatchCount()).toBe(before);
+      await first.runTimer();
+      expect(first.state().doc.toString()).toBe("### 1. Waiting\n");
+      expect(first.actions).toEqual(["stage"]);
+      expect(first.dispatchCount()).toBe(before + 1);
+      expect(first.pendingTimers()).toBe(0);
+      expect(openEditorFileSurface.read("Target.md").kind).toBe("ready");
+    } finally {
+      first.plugin.destroy();
+      second.plugin.destroy();
+    }
+  });
+
+  it("wakes the old-path survivor when another owner moves", async () => {
+    const first = editorExtensionHarness("### Wait\n");
+    const second = editorExtensionHarness("### Wait\n");
+    try {
+      await first.runTimer();
+      await second.runTimer();
+      const before = first.dispatchCount();
+      second.setPath("Moved.md");
+      expect(first.pendingTimers()).toBe(1);
+      expect(first.dispatchCount()).toBe(before);
+      expect(openEditorFileSurface.read("Moved.md").kind).toBe("ready");
+      await first.runTimer();
+      expect(first.state().doc.toString()).toBe("### 1. Wait\n");
+      expect(first.actions).toEqual(["stage"]);
+      expect(openEditorFileSurface.read("Target.md").kind).toBe("ready");
+    } finally {
+      first.plugin.destroy();
+      second.plugin.destroy();
+    }
+  });
+
+  it("moves an owner between paths without leaving an old-path registration", () => {
+    const source = editorExtensionHarness("### Move\n");
+    try {
+      expect(openEditorFileSurface.read("Target.md").kind).toBe("ready");
+      source.setPath("Moved.md");
+      expect(openEditorFileSurface.read("Target.md").kind).toBe("closed");
+      expect(openEditorFileSurface.read("Moved.md").kind).toBe("ready");
+      source.setPath("Moved.md");
+      source.plugin.destroy();
+      source.plugin.destroy();
+      expect(openEditorFileSurface.read("Moved.md").kind).toBe("closed");
+    } finally {
+      source.plugin.destroy();
+    }
+  });
+
   it("updates a heading link through the source editor with a reading view open", async () => {
     const before = "[[Target#Old]]\n";
     const after = "[[Target#New]]\n";
