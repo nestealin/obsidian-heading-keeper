@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_STORED_SETTINGS } from "../src/settings.js";
+import { PluginDataStore } from "../src/plugin-data.js";
+import { sha256Text } from "../src/persistence/plan-service.js";
 import {
   AutomaticMaintenance,
   realizedRenameIntents,
@@ -37,6 +39,65 @@ function journalHarness() {
 }
 
 describe("AutomaticMaintenance", () => {
+  it.each([
+    ["", "New heading"],
+    [" \t", "New heading"],
+    ["Original", ""],
+    ["Original", " \t"],
+  ])(
+    "ignores metadata transitions with blank fragments: %j -> %j",
+    async (before, after) => {
+      const saves: unknown[] = [];
+      const errors: string[] = [];
+      const reads: string[] = [];
+      const executions: PersistedOperation[] = [];
+      const store = new PluginDataStore(
+        async () => undefined,
+        async (value) => {
+          saves.push(value);
+        },
+        sha256Text,
+      );
+      await store.initialize();
+      const maintenance = new AutomaticMaintenance({
+        settings: () => ({ ...DEFAULT_STORED_SETTINGS, mode: "persisted" }),
+        read: async (path) => {
+          reads.push(path);
+          return `### ${after}\n`;
+        },
+        indexReady: () => true,
+        candidates: () => [],
+        resolveTarget: () => ({ kind: "file", path: "Target.md" }),
+        operationDependencies: {
+          createId: () => "blank-heading",
+          now: () => "2026-10-31T00:00:00.000Z",
+          hashText: sha256Text,
+        },
+        journal: store.journal,
+        renameIntents: store.renameIntents,
+        execute: async (operation) => {
+          executions.push(operation);
+          return { kind: "completed", operation };
+        },
+        now: () => Date.parse("2026-10-31T00:00:00.000Z"),
+        onStorageError: (code) => {
+          errors.push(code);
+        },
+      });
+      try {
+        await maintenance.acceptMetadataChange("Target.md", [before], [after]);
+        await maintenance.flush();
+        expect(errors).toEqual([]);
+        expect(saves).toEqual([]);
+        expect(store.renameIntents.list()).toEqual([]);
+        expect(reads).toEqual([]);
+        expect(executions).toEqual([]);
+      } finally {
+        maintenance.dispose();
+      }
+    },
+  );
+
   it("keeps every intermediate heading alias when a rename chain reaches the saved title", () => {
     const intents = [
       ["Original", "Middle"],

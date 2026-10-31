@@ -359,7 +359,9 @@ function uniqueHeadingRename(
       ? []
       : [{ oldHeading: heading, newHeading: after[index] ?? "" }],
   );
-  return changed.length === 1 && changed[0]!.newHeading.length > 0
+  return changed.length === 1 &&
+    changed[0]!.oldHeading.trim().length > 0 &&
+    changed[0]!.newHeading.trim().length > 0
     ? { targetPath, ...changed[0]! }
     : null;
 }

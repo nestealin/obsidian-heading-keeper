@@ -518,6 +518,9 @@ describe("editor virtual decorations", () => {
       second.plugin.destroy();
 
       expect(first.pendingTimers()).toBe(1);
+      await first.runTimer();
+      expect(first.state().doc.toString()).toBe("### 1. 笔记内恢复\n");
+      expect(first.actions).toEqual(["stage"]);
     } finally {
       first.plugin.destroy();
       second.plugin.destroy();
